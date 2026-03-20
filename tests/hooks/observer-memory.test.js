@@ -299,34 +299,35 @@ console.log('\n--- Observer Haiku invocation flags ---');
 
 test('claude invocation includes --allowedTools flag', () => {
   const content = fs.readFileSync(observerLoopPath, 'utf8');
-  assert.ok(content.includes('--allowedTools'), 'observer-loop.sh should include --allowedTools flag in claude invocation');
+  const lines = content.split('\n');
+  const claudeIdx = lines.findIndex(l => l.includes('claude --model haiku'));
+  assert.ok(claudeIdx !== -1, 'Should find claude --model haiku invocation');
+  const cmdBlock = lines.slice(claudeIdx, claudeIdx + 3).join(' ');
+  assert.ok(cmdBlock.includes('--allowedTools'), 'claude command block should include --allowedTools flag');
 });
 
-test('allowedTools includes Read permission', () => {
+test('allowedTools uses path-scoped Read permission', () => {
   const content = fs.readFileSync(observerLoopPath, 'utf8');
   const match = content.match(/--allowedTools\s+"([^"]+)"/);
   assert.ok(match, 'Should find --allowedTools with quoted value');
-  assert.ok(match[1].includes('Read'), `allowedTools should include Read, got: ${match[1]}`);
+  assert.ok(match[1].includes('Read('), `allowedTools should include path-scoped Read, got: ${match[1]}`);
 });
 
-test('allowedTools includes Write permission', () => {
+test('allowedTools uses path-scoped Write permission', () => {
   const content = fs.readFileSync(observerLoopPath, 'utf8');
   const match = content.match(/--allowedTools\s+"([^"]+)"/);
   assert.ok(match, 'Should find --allowedTools with quoted value');
-  assert.ok(match[1].includes('Write'), `allowedTools should include Write, got: ${match[1]}`);
+  assert.ok(match[1].includes('Write('), `allowedTools should include path-scoped Write, got: ${match[1]}`);
+  assert.ok(match[1].includes('Write(/${INSTINCTS_DIR}'), 'Write should be scoped to INSTINCTS_DIR');
 });
 
 test('claude invocation still includes ECC_SKIP_OBSERVE and ECC_HOOK_PROFILE guards', () => {
   const content = fs.readFileSync(observerLoopPath, 'utf8');
-  // Find the claude execution line(s)
   const lines = content.split('\n');
   const claudeLine = lines.find(l => l.includes('claude --model haiku'));
   assert.ok(claudeLine, 'Should find claude --model haiku invocation line');
-  // The env vars are on the same line as the claude command
-  const claudeLineIndex = lines.indexOf(claudeLine);
-  const fullCommand = lines.slice(Math.max(0, claudeLineIndex - 1), claudeLineIndex + 3).join(' ');
-  assert.ok(fullCommand.includes('ECC_SKIP_OBSERVE=1'), 'claude invocation should include ECC_SKIP_OBSERVE=1 guard');
-  assert.ok(fullCommand.includes('ECC_HOOK_PROFILE=minimal'), 'claude invocation should include ECC_HOOK_PROFILE=minimal guard');
+  assert.ok(claudeLine.includes('ECC_SKIP_OBSERVE=1'), 'claude invocation should include ECC_SKIP_OBSERVE=1 guard');
+  assert.ok(claudeLine.includes('ECC_HOOK_PROFILE=minimal'), 'claude invocation should include ECC_HOOK_PROFILE=minimal guard');
 });
 
 // ──────────────────────────────────────────────────────

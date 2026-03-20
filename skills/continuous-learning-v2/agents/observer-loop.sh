@@ -114,8 +114,9 @@ PROMPT
   fi
 
   # Prevent observe.sh from recording this automated Haiku session as observations
+  # Scope file access: Read analysis temp file + instincts dir; Write instincts dir only.
   ECC_SKIP_OBSERVE=1 ECC_HOOK_PROFILE=minimal claude --model haiku --max-turns "$max_turns" --print \
-    --allowedTools "Read,Write" \
+    --allowedTools "Read(/${analysis_file}) Read(/${INSTINCTS_DIR}/**) Write(/${INSTINCTS_DIR}/**)" \
     < "$prompt_file" >> "$LOG_FILE" 2>&1 &
   claude_pid=$!
 
