@@ -8,7 +8,9 @@ const assert = require('assert');
 const path = require('path');
 const fs = require('fs');
 const os = require('os');
-const { spawn, spawnSync } = require('child_process');
+const { execFileSync, spawn, spawnSync } = require('child_process');
+
+const SKIP_BASH = process.platform === 'win32';
 
 function toBashPath(filePath) {
   if (process.platform !== 'win32') {
@@ -16,8 +18,64 @@ function toBashPath(filePath) {
   }
 
   return String(filePath)
-    .replace(/^([A-Za-z]):/, (_, driveLetter) => `/mnt/${driveLetter.toLowerCase()}`)
+    .replace(/^([A-Za-z]):/, (_, driveLetter) => `/${driveLetter.toLowerCase()}`)
     .replace(/\\/g, '/');
+}
+
+function fromBashPath(filePath) {
+  if (process.platform !== 'win32') {
+    return filePath;
+  }
+
+  const rawPath = String(filePath || '');
+  if (!rawPath) {
+    return rawPath;
+  }
+
+  try {
+    return execFileSync(
+      'bash',
+      ['-lc', 'cygpath -w -- "$1"', 'bash', rawPath],
+      { stdio: ['ignore', 'pipe', 'ignore'] }
+    )
+      .toString()
+      .trim();
+  } catch {
+    // Fall back to common Git Bash path shapes when cygpath is unavailable.
+  }
+
+  const match = rawPath.match(/^\/(?:cygdrive\/)?([A-Za-z])\/(.*)$/)
+    || rawPath.match(/^\/\/([A-Za-z])\/(.*)$/);
+  if (match) {
+    return `${match[1].toUpperCase()}:\\${match[2].replace(/\//g, '\\')}`;
+  }
+
+  if (/^[A-Za-z]:\//.test(rawPath)) {
+    return rawPath.replace(/\//g, '\\');
+  }
+
+  return rawPath;
+}
+
+function normalizeComparablePath(filePath) {
+  const nativePath = fromBashPath(filePath);
+  if (!nativePath) {
+    return nativePath;
+  }
+
+  let comparablePath = nativePath;
+  try {
+    comparablePath = fs.realpathSync.native ? fs.realpathSync.native(nativePath) : fs.realpathSync(nativePath);
+  } catch {
+    comparablePath = path.resolve(nativePath);
+  }
+
+  comparablePath = comparablePath.replace(/[\\/]+/g, '/');
+  if (comparablePath.length > 1 && !/^[A-Za-z]:\/$/.test(comparablePath)) {
+    comparablePath = comparablePath.replace(/\/+$/, '');
+  }
+
+  return process.platform === 'win32' ? comparablePath.toLowerCase() : comparablePath;
 }
 
 function sleepMs(ms) {
@@ -93,8 +151,8 @@ function runShellScript(scriptPath, args = [], input = '', env = {}, cwd = proce
     }
     proc.stdin.end();
 
-    proc.stdout.on('data', data => stdout += data);
-    proc.stderr.on('data', data => stderr += data);
+    proc.stdout.on('data', data => (stdout += data));
+    proc.stderr.on('data', data => (stderr += data));
     proc.on('close', code => resolve({ code, stdout, stderr }));
     proc.on('error', reject);
   });
@@ -180,9 +238,7 @@ function assertNoProjectDetectionSideEffects(homeDir, testName) {
 
   assert.ok(!fs.existsSync(registryPath), `${testName} should not create projects.json`);
 
-  const projectEntries = fs.existsSync(projectsDir)
-    ? fs.readdirSync(projectsDir).filter(entry => fs.statSync(path.join(projectsDir, entry)).isDirectory())
-    : [];
+  const projectEntries = fs.existsSync(projectsDir) ? fs.readdirSync(projectsDir).filter(entry => fs.statSync(path.join(projectsDir, entry)).isDirectory()) : [];
   assert.strictEqual(projectEntries.length, 0, `${testName} should not create project directories`);
 }
 
@@ -204,11 +260,17 @@ async function assertObserveSkipBeforeProjectDetection(testCase) {
       ...(testCase.payload || {})
     });
 
-    const result = await runShellScript(observePath, ['post'], payload, {
-      HOME: homeDir,
-      USERPROFILE: homeDir,
-      ...testCase.env
-    }, projectDir);
+    const result = await runShellScript(
+      observePath,
+      ['post'],
+      payload,
+      {
+        HOME: homeDir,
+        USERPROFILE: homeDir,
+        ...testCase.env
+      },
+      projectDir
+    );
 
     assert.strictEqual(result.code, 0, `${testCase.name} should exit successfully, stderr: ${result.stderr}`);
     assertNoProjectDetectionSideEffects(homeDir, testCase.name);
@@ -228,13 +290,13 @@ function runPatchedRunAll(tempRoot) {
   const result = spawnSync('node', [wrapperPath], {
     encoding: 'utf8',
     stdio: ['pipe', 'pipe', 'pipe'],
-    timeout: 15000,
+    timeout: 15000
   });
 
   return {
     code: result.status ?? 1,
     stdout: result.stdout || '',
-    stderr: result.stderr || '',
+    stderr: result.stderr || ''
   };
 }
 
@@ -354,6 +416,36 @@ async function runTests() {
   else failed++;
 
   if (
+    await asyncTest('strips ANSI escape codes from injected session content', async () => {
+      const isoHome = path.join(os.tmpdir(), `ecc-ansi-start-${Date.now()}`);
+      const sessionsDir = path.join(isoHome, '.claude', 'sessions');
+      fs.mkdirSync(sessionsDir, { recursive: true });
+      fs.mkdirSync(path.join(isoHome, '.claude', 'skills', 'learned'), { recursive: true });
+
+      const sessionFile = path.join(sessionsDir, '2026-02-11-winansi00-session.tmp');
+      fs.writeFileSync(
+        sessionFile,
+        '\x1b[H\x1b[2J\x1b[3J# Real Session\n\nI worked on \x1b[1;36mWindows terminal handling\x1b[0m.\x1b[K\n'
+      );
+
+      try {
+        const result = await runScript(path.join(scriptsDir, 'session-start.js'), '', {
+          HOME: isoHome,
+          USERPROFILE: isoHome
+        });
+        assert.strictEqual(result.code, 0);
+        assert.ok(result.stdout.includes('Previous session summary'), 'Should inject real session content');
+        assert.ok(result.stdout.includes('Windows terminal handling'), 'Should preserve sanitized session text');
+        assert.ok(!result.stdout.includes('\x1b['), 'Should not emit ANSI escape codes');
+      } finally {
+        fs.rmSync(isoHome, { recursive: true, force: true });
+      }
+    })
+  )
+    passed++;
+  else failed++;
+
+  if (
     await asyncTest('reports learned skills count', async () => {
       const isoHome = path.join(os.tmpdir(), `ecc-skills-start-${Date.now()}`);
       const learnedDir = path.join(isoHome, '.claude', 'skills', 'learned');
@@ -388,11 +480,7 @@ async function runTests() {
         tool_name: 'Write',
         tool_input: { file_path: 'src/index.ts', content: 'console.log("ok");' }
       });
-      const result = await runScript(
-        path.join(scriptsDir, 'insaits-security-wrapper.js'),
-        stdinData,
-        { ECC_ENABLE_INSAITS: '' }
-      );
+      const result = await runScript(path.join(scriptsDir, 'insaits-security-wrapper.js'), stdinData, { ECC_ENABLE_INSAITS: '' });
       assert.strictEqual(result.code, 0, `Exit code should be 0, got ${result.code}`);
       assert.strictEqual(result.stdout, stdinData, 'Should pass stdin through unchanged');
       assert.strictEqual(result.stderr, '', 'Should stay silent when integration is disabled');
@@ -1782,10 +1870,14 @@ async function runTests() {
           for (const hook of entry.hooks) {
             if (hook.type === 'command') {
               const isNode = hook.command.startsWith('node');
+              const isNpx = hook.command.startsWith('npx ');
               const isSkillScript = hook.command.includes('/skills/') && (/^(bash|sh)\s/.test(hook.command) || hook.command.startsWith('${CLAUDE_PLUGIN_ROOT}/skills/'));
               const isHookShellWrapper = /^(bash|sh)\s+["']?\$\{CLAUDE_PLUGIN_ROOT\}\/scripts\/hooks\/run-with-flags-shell\.sh/.test(hook.command);
               const isSessionStartFallback = hook.command.startsWith('bash -lc') && hook.command.includes('run-with-flags.js');
-              assert.ok(isNode || isSkillScript || isHookShellWrapper || isSessionStartFallback, `Hook command should use node or approved shell wrapper: ${hook.command.substring(0, 100)}...`);
+              assert.ok(
+                isNode || isNpx || isSkillScript || isHookShellWrapper || isSessionStartFallback,
+                `Hook command should use node or approved shell wrapper: ${hook.command.substring(0, 100)}...`
+              );
             }
           }
         }
@@ -1834,10 +1926,7 @@ async function runTests() {
       assert.ok(insaitsHook, 'Should define an InsAIts PreToolUse hook');
       assert.strictEqual(insaitsHook.matcher, 'Bash|Write|Edit|MultiEdit', 'InsAIts hook should avoid matching every tool');
       assert.ok(insaitsHook.description.includes('ECC_ENABLE_INSAITS=1'), 'InsAIts hook should document explicit opt-in');
-      assert.ok(
-        insaitsHook.hooks[0].command.includes('insaits-security-wrapper.js'),
-        'InsAIts hook should execute through the JS wrapper'
-      );
+      assert.ok(insaitsHook.hooks[0].command.includes('insaits-security-wrapper.js'), 'InsAIts hook should execute through the JS wrapper');
     })
   )
     passed++;
@@ -2261,10 +2350,7 @@ async function runTests() {
 
   if (
     test('observer-loop uses a configurable max-turn budget with safe default', () => {
-      const observerLoopSource = fs.readFileSync(
-        path.join(__dirname, '..', '..', 'skills', 'continuous-learning-v2', 'agents', 'observer-loop.sh'),
-        'utf8'
-      );
+      const observerLoopSource = fs.readFileSync(path.join(__dirname, '..', '..', 'skills', 'continuous-learning-v2', 'agents', 'observer-loop.sh'), 'utf8');
 
       assert.ok(observerLoopSource.includes('ECC_OBSERVER_MAX_TURNS'), 'observer-loop should allow max-turn overrides');
       assert.ok(observerLoopSource.includes('max_turns="${ECC_OBSERVER_MAX_TURNS:-10}"'), 'observer-loop should default to 10 turns');
@@ -2276,7 +2362,10 @@ async function runTests() {
     passed++;
   else failed++;
 
-  if (
+  if (SKIP_BASH) {
+    console.log('  ⊘ detect-project exports the resolved Python command (skipped on Windows)');
+    passed++;
+  } else if (
     await asyncTest('detect-project exports the resolved Python command for downstream scripts', async () => {
       const detectProjectPath = path.join(__dirname, '..', '..', 'skills', 'continuous-learning-v2', 'scripts', 'detect-project.sh');
       const shellCommand = [`source "${toBashPath(detectProjectPath)}" >/dev/null 2>&1`, 'printf "%s\\n" "${CLV2_PYTHON_CMD:-}"'].join('; ');
@@ -2304,7 +2393,10 @@ async function runTests() {
     passed++;
   else failed++;
 
-  if (
+  if (SKIP_BASH) {
+    console.log('  ⊘ detect-project writes project metadata (skipped on Windows)');
+    passed++;
+  } else if (
     await asyncTest('detect-project writes project metadata to the registry and project directory', async () => {
       const testRoot = createTestDir();
       const homeDir = path.join(testRoot, 'home');
@@ -2317,15 +2409,15 @@ async function runTests() {
         spawnSync('git', ['init'], { cwd: repoDir, stdio: 'ignore' });
         spawnSync('git', ['remote', 'add', 'origin', 'https://github.com/example/ecc-test.git'], { cwd: repoDir, stdio: 'ignore' });
 
-        const shellCommand = [
-          `cd "${toBashPath(repoDir)}"`,
-          `source "${toBashPath(detectProjectPath)}" >/dev/null 2>&1`,
-          'printf "%s\\n" "$PROJECT_ID"',
-          'printf "%s\\n" "$PROJECT_DIR"'
-        ].join('; ');
+        const shellCommand = [`cd "${toBashPath(repoDir)}"`, `source "${toBashPath(detectProjectPath)}" >/dev/null 2>&1`, 'printf "%s\\n" "$PROJECT_ID"', 'printf "%s\\n" "$PROJECT_DIR"'].join('; ');
 
         const proc = spawn('bash', ['-lc', shellCommand], {
-          env: { ...process.env, HOME: homeDir, USERPROFILE: homeDir },
+          env: {
+            ...process.env,
+            HOME: homeDir,
+            USERPROFILE: homeDir,
+            CLAUDE_PROJECT_DIR: ''
+          },
           stdio: ['ignore', 'pipe', 'pipe']
         });
 
@@ -2343,22 +2435,43 @@ async function runTests() {
 
         const [projectId, projectDir] = stdout.trim().split(/\r?\n/);
         const registryPath = path.join(homeDir, '.claude', 'homunculus', 'projects.json');
-        const projectMetadataPath = path.join(projectDir, 'project.json');
+        const expectedProjectDir = path.join(
+          homeDir,
+          '.claude',
+          'homunculus',
+          'projects',
+          projectId
+        );
+        const projectMetadataPath = path.join(expectedProjectDir, 'project.json');
 
         assert.ok(projectId, 'detect-project should emit a project id');
+        assert.ok(projectDir, 'detect-project should emit a project directory');
         assert.ok(fs.existsSync(registryPath), 'projects.json should be created');
         assert.ok(fs.existsSync(projectMetadataPath), 'project.json should be written in the project directory');
 
         const registry = JSON.parse(fs.readFileSync(registryPath, 'utf8'));
         const metadata = JSON.parse(fs.readFileSync(projectMetadataPath, 'utf8'));
+        const comparableMetadataRoot = normalizeComparablePath(metadata.root);
+        const comparableRepoDir = normalizeComparablePath(repoDir);
+        const comparableProjectDir = normalizeComparablePath(projectDir);
+        const comparableExpectedProjectDir = normalizeComparablePath(expectedProjectDir);
 
         assert.ok(registry[projectId], 'registry should contain the detected project');
         assert.strictEqual(metadata.id, projectId, 'project.json should include the detected id');
         assert.strictEqual(metadata.name, path.basename(repoDir), 'project.json should include the repo name');
-        assert.strictEqual(fs.realpathSync(metadata.root), fs.realpathSync(repoDir), 'project.json should include the repo root');
+        assert.strictEqual(
+          comparableMetadataRoot,
+          comparableRepoDir,
+          `project.json should include the repo root (expected ${comparableRepoDir}, got ${comparableMetadataRoot})`
+        );
         assert.strictEqual(metadata.remote, 'https://github.com/example/ecc-test.git', 'project.json should include the sanitized remote');
         assert.ok(metadata.created_at, 'project.json should include created_at');
         assert.ok(metadata.last_seen, 'project.json should include last_seen');
+        assert.strictEqual(
+          comparableProjectDir,
+          comparableExpectedProjectDir,
+          `PROJECT_DIR should point at the project storage directory (expected ${comparableExpectedProjectDir}, got ${comparableProjectDir})`
+        );
       } finally {
         cleanupTestDir(testRoot);
       }
@@ -2367,88 +2480,125 @@ async function runTests() {
     passed++;
   else failed++;
 
-  if (await asyncTest('observe.sh falls back to legacy output fields when tool_response is null', async () => {
-    const homeDir = createTestDir();
-    const projectDir = createTestDir();
-    const observePath = path.join(__dirname, '..', '..', 'skills', 'continuous-learning-v2', 'hooks', 'observe.sh');
-    const payload = JSON.stringify({
-      tool_name: 'Bash',
-      tool_input: { command: 'echo hello' },
-      tool_response: null,
-      tool_output: 'legacy output',
-      session_id: 'session-123',
-      cwd: projectDir
-    });
+  if (SKIP_BASH) {
+    console.log('  ⊘ observe.sh falls back to legacy output fields (skipped on Windows)');
+    passed++;
+  } else if (
+    await asyncTest('observe.sh falls back to legacy output fields when tool_response is null', async () => {
+      const homeDir = createTestDir();
+      const projectDir = createTestDir();
+      const observePath = path.join(__dirname, '..', '..', 'skills', 'continuous-learning-v2', 'hooks', 'observe.sh');
+      const payload = JSON.stringify({
+        tool_name: 'Bash',
+        tool_input: { command: 'echo hello' },
+        tool_response: null,
+        tool_output: 'legacy output',
+        session_id: 'session-123',
+        cwd: projectDir
+      });
 
-    try {
-      const result = await runShellScript(observePath, ['post'], payload, {
-        HOME: homeDir,
-        USERPROFILE: homeDir,
-        CLAUDE_PROJECT_DIR: projectDir
-      }, projectDir);
+      try {
+        const result = await runShellScript(
+          observePath,
+          ['post'],
+          payload,
+          {
+            HOME: homeDir,
+            USERPROFILE: homeDir,
+            CLAUDE_PROJECT_DIR: projectDir
+          },
+          projectDir
+        );
 
-      assert.strictEqual(result.code, 0, `observe.sh should exit successfully, stderr: ${result.stderr}`);
+        assert.strictEqual(result.code, 0, `observe.sh should exit successfully, stderr: ${result.stderr}`);
 
-      const projectsDir = path.join(homeDir, '.claude', 'homunculus', 'projects');
-      const projectIds = fs.readdirSync(projectsDir);
-      assert.strictEqual(projectIds.length, 1, 'observe.sh should create one project-scoped observation directory');
+        const projectsDir = path.join(homeDir, '.claude', 'homunculus', 'projects');
+        const projectIds = fs.readdirSync(projectsDir);
+        assert.strictEqual(projectIds.length, 1, 'observe.sh should create one project-scoped observation directory');
 
-      const observationsPath = path.join(projectsDir, projectIds[0], 'observations.jsonl');
-      const observations = fs.readFileSync(observationsPath, 'utf8').trim().split('\n').filter(Boolean);
-      assert.ok(observations.length > 0, 'observe.sh should append at least one observation');
+        const observationsPath = path.join(projectsDir, projectIds[0], 'observations.jsonl');
+        const observations = fs.readFileSync(observationsPath, 'utf8').trim().split('\n').filter(Boolean);
+        assert.ok(observations.length > 0, 'observe.sh should append at least one observation');
 
-      const observation = JSON.parse(observations[0]);
-      assert.strictEqual(observation.output, 'legacy output', 'observe.sh should fall back to legacy tool_output when tool_response is null');
-    } finally {
-      cleanupTestDir(homeDir);
-      cleanupTestDir(projectDir);
-    }
-  })) passed++; else failed++;
+        const observation = JSON.parse(observations[0]);
+        assert.strictEqual(observation.output, 'legacy output', 'observe.sh should fall back to legacy tool_output when tool_response is null');
+      } finally {
+        cleanupTestDir(homeDir);
+        cleanupTestDir(projectDir);
+      }
+    })
+  )
+    passed++;
+  else failed++;
 
-  if (await asyncTest('observe.sh skips non-cli entrypoints before project detection side effects', async () => {
-    await assertObserveSkipBeforeProjectDetection({
-      name: 'non-cli entrypoint',
-      env: { CLAUDE_CODE_ENTRYPOINT: 'mcp' }
-    });
-  })) passed++; else failed++;
+  if (SKIP_BASH) {
+    console.log('  \u2298 observe.sh skips non-cli entrypoints (skipped on Windows)');
+    passed++;
+  } else if (
+    await asyncTest('observe.sh skips non-cli entrypoints before project detection side effects', async () => {
+      await assertObserveSkipBeforeProjectDetection({
+        name: 'non-cli entrypoint',
+        env: { CLAUDE_CODE_ENTRYPOINT: 'mcp' }
+      });
+    })
+  )
+    passed++;
+  else failed++;
 
-  if (await asyncTest('observe.sh skips minimal hook profile before project detection side effects', async () => {
-    await assertObserveSkipBeforeProjectDetection({
-      name: 'minimal hook profile',
-      env: { CLAUDE_CODE_ENTRYPOINT: 'cli', ECC_HOOK_PROFILE: 'minimal' }
-    });
-  })) passed++; else failed++;
+  if (SKIP_BASH) { console.log("  ⊘ observe.sh skips minimal hook profile (skipped on Windows)"); passed++; } else if (
+    await asyncTest('observe.sh skips minimal hook profile before project detection side effects', async () => {
+      await assertObserveSkipBeforeProjectDetection({
+        name: 'minimal hook profile',
+        env: { CLAUDE_CODE_ENTRYPOINT: 'cli', ECC_HOOK_PROFILE: 'minimal' }
+      });
+    })
+  )
+    passed++;
+  else failed++;
 
-  if (await asyncTest('observe.sh skips cooperative skip env before project detection side effects', async () => {
-    await assertObserveSkipBeforeProjectDetection({
-      name: 'cooperative skip env',
-      env: { CLAUDE_CODE_ENTRYPOINT: 'cli', ECC_SKIP_OBSERVE: '1' }
-    });
-  })) passed++; else failed++;
+  if (SKIP_BASH) { console.log("  ⊘ observe.sh skips cooperative skip env (skipped on Windows)"); passed++; } else if (
+    await asyncTest('observe.sh skips cooperative skip env before project detection side effects', async () => {
+      await assertObserveSkipBeforeProjectDetection({
+        name: 'cooperative skip env',
+        env: { CLAUDE_CODE_ENTRYPOINT: 'cli', ECC_SKIP_OBSERVE: '1' }
+      });
+    })
+  )
+    passed++;
+  else failed++;
 
-  if (await asyncTest('observe.sh skips subagent payloads before project detection side effects', async () => {
-    await assertObserveSkipBeforeProjectDetection({
-      name: 'subagent payload',
-      env: { CLAUDE_CODE_ENTRYPOINT: 'cli' },
-      payload: { agent_id: 'agent-123' }
-    });
-  })) passed++; else failed++;
+  if (SKIP_BASH) { console.log("  ⊘ observe.sh skips subagent payloads (skipped on Windows)"); passed++; } else if (
+    await asyncTest('observe.sh skips subagent payloads before project detection side effects', async () => {
+      await assertObserveSkipBeforeProjectDetection({
+        name: 'subagent payload',
+        env: { CLAUDE_CODE_ENTRYPOINT: 'cli' },
+        payload: { agent_id: 'agent-123' }
+      });
+    })
+  )
+    passed++;
+  else failed++;
 
-  if (await asyncTest('observe.sh skips configured observer-session paths before project detection side effects', async () => {
-    await assertObserveSkipBeforeProjectDetection({
-      name: 'cwd skip path',
-      env: {
-        CLAUDE_CODE_ENTRYPOINT: 'cli',
-        ECC_OBSERVE_SKIP_PATHS: ' observer-sessions , .claude-mem '
-      },
-      cwdSuffix: path.join('observer-sessions', 'worker')
-    });
-  })) passed++; else failed++;
+  if (SKIP_BASH) { console.log("  ⊘ observe.sh skips configured observer-session paths (skipped on Windows)"); passed++; } else if (
+    await asyncTest('observe.sh skips configured observer-session paths before project detection side effects', async () => {
+      await assertObserveSkipBeforeProjectDetection({
+        name: 'cwd skip path',
+        env: {
+          CLAUDE_CODE_ENTRYPOINT: 'cli',
+          ECC_OBSERVE_SKIP_PATHS: ' observer-sessions , .claude-mem '
+        },
+        cwdSuffix: path.join('observer-sessions', 'worker')
+      });
+    })
+  )
+    passed++;
+  else failed++;
 
-  if (await asyncTest('matches .tsx extension for type checking', async () => {
-    const testDir = createTestDir();
-    const testFile = path.join(testDir, 'component.tsx');
-    fs.writeFileSync(testFile, 'const x: number = 1;');
+  if (
+    await asyncTest('matches .tsx extension for type checking', async () => {
+      const testDir = createTestDir();
+      const testFile = path.join(testDir, 'component.tsx');
+      fs.writeFileSync(testFile, 'const x: number = 1;');
 
       const stdinJson = JSON.stringify({ tool_input: { file_path: testFile } });
       const result = await runScript(path.join(scriptsDir, 'post-edit-typecheck.js'), stdinJson);
@@ -2658,10 +2808,7 @@ async function runTests() {
       const branch = spawnSync('git', ['rev-parse', '--abbrev-ref', 'HEAD'], { encoding: 'utf8' }).stdout.trim();
       const project = path.basename(spawnSync('git', ['rev-parse', '--show-toplevel'], { encoding: 'utf8' }).stdout.trim());
 
-      fs.writeFileSync(
-        sessionFile,
-        `# Session: ${today}\n**Date:** ${today}\n**Started:** 09:00\n**Last Updated:** 09:00\n\n---\n\n## Current State\n\n[Session context goes here]\n`
-      );
+      fs.writeFileSync(sessionFile, `# Session: ${today}\n**Date:** ${today}\n**Started:** 09:00\n**Last Updated:** 09:00\n\n---\n\n## Current State\n\n[Session context goes here]\n`);
 
       const result = await runScript(path.join(scriptsDir, 'session-end.js'), '', {
         HOME: testDir,

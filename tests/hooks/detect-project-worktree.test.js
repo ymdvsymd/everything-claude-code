@@ -8,11 +8,17 @@
  * Run with: node tests/hooks/detect-project-worktree.test.js
  */
 
+
+// Skip on Windows — these tests invoke bash scripts directly
+if (process.platform === 'win32') {
+  console.log('Skipping bash-dependent worktree tests on Windows\n');
+  process.exit(0);
+}
 const assert = require('assert');
 const path = require('path');
 const fs = require('fs');
 const os = require('os');
-const { execSync } = require('child_process');
+const { execFileSync, execSync } = require('child_process');
 
 let passed = 0;
 let failed = 0;
@@ -39,6 +45,20 @@ function cleanupDir(dir) {
   } catch {
     // ignore cleanup errors
   }
+}
+
+function toBashPath(filePath) {
+  if (process.platform !== 'win32') {
+    return filePath;
+  }
+
+  return String(filePath)
+    .replace(/^([A-Za-z]):/, (_, driveLetter) => `/${driveLetter.toLowerCase()}`)
+    .replace(/\\/g, '/');
+}
+
+function runBash(command, options = {}) {
+  return execFileSync('bash', ['-lc', command], options).toString().trim();
 }
 
 const repoRoot = path.resolve(__dirname, '..', '..');
@@ -98,7 +118,7 @@ test('[ -d ] returns true for .git directory', () => {
   const dir = path.join(behaviorDir, 'test-d-dir');
   fs.mkdirSync(dir, { recursive: true });
   fs.mkdirSync(path.join(dir, '.git'));
-  const result = execSync(`bash -c '[ -d "${dir}/.git" ] && echo yes || echo no'`).toString().trim();
+  const result = runBash(`[ -d "${toBashPath(path.join(dir, '.git'))}" ] && echo yes || echo no`);
   assert.strictEqual(result, 'yes');
 });
 
@@ -106,7 +126,7 @@ test('[ -d ] returns false for .git file', () => {
   const dir = path.join(behaviorDir, 'test-d-file');
   fs.mkdirSync(dir, { recursive: true });
   fs.writeFileSync(path.join(dir, '.git'), 'gitdir: /some/path\n');
-  const result = execSync(`bash -c '[ -d "${dir}/.git" ] && echo yes || echo no'`).toString().trim();
+  const result = runBash(`[ -d "${toBashPath(path.join(dir, '.git'))}" ] && echo yes || echo no`);
   assert.strictEqual(result, 'no');
 });
 
@@ -114,7 +134,7 @@ test('[ -e ] returns true for .git directory', () => {
   const dir = path.join(behaviorDir, 'test-e-dir');
   fs.mkdirSync(dir, { recursive: true });
   fs.mkdirSync(path.join(dir, '.git'));
-  const result = execSync(`bash -c '[ -e "${dir}/.git" ] && echo yes || echo no'`).toString().trim();
+  const result = runBash(`[ -e "${toBashPath(path.join(dir, '.git'))}" ] && echo yes || echo no`);
   assert.strictEqual(result, 'yes');
 });
 
@@ -122,14 +142,14 @@ test('[ -e ] returns true for .git file', () => {
   const dir = path.join(behaviorDir, 'test-e-file');
   fs.mkdirSync(dir, { recursive: true });
   fs.writeFileSync(path.join(dir, '.git'), 'gitdir: /some/path\n');
-  const result = execSync(`bash -c '[ -e "${dir}/.git" ] && echo yes || echo no'`).toString().trim();
+  const result = runBash(`[ -e "${toBashPath(path.join(dir, '.git'))}" ] && echo yes || echo no`);
   assert.strictEqual(result, 'yes');
 });
 
 test('[ -e ] returns false when .git does not exist', () => {
   const dir = path.join(behaviorDir, 'test-e-none');
   fs.mkdirSync(dir, { recursive: true });
-  const result = execSync(`bash -c '[ -e "${dir}/.git" ] && echo yes || echo no'`).toString().trim();
+  const result = runBash(`[ -e "${toBashPath(path.join(dir, '.git'))}" ] && echo yes || echo no`);
   assert.strictEqual(result, 'no');
 });
 
@@ -188,20 +208,21 @@ test('detect-project.sh sets PROJECT_NAME and non-global PROJECT_ID for worktree
 
     // Source detect-project.sh from the worktree directory and capture results
     const script = `
-      export CLAUDE_PROJECT_DIR="${worktreeDir}"
-      export HOME="${testDir}"
-      source "${detectProjectPath}"
+      export CLAUDE_PROJECT_DIR="${toBashPath(worktreeDir)}"
+      export HOME="${toBashPath(testDir)}"
+      source "${toBashPath(detectProjectPath)}"
       echo "PROJECT_NAME=\${PROJECT_NAME}"
       echo "PROJECT_ID=\${PROJECT_ID}"
     `;
 
-    const result = execSync(`bash -c '${script.replace(/'/g, "'\\''")}'`, {
+    const result = execFileSync('bash', ['-lc', script], {
       cwd: worktreeDir,
       timeout: 10000,
       env: {
         ...process.env,
-        HOME: testDir,
-        CLAUDE_PROJECT_DIR: worktreeDir
+        HOME: toBashPath(testDir),
+        USERPROFILE: testDir,
+        CLAUDE_PROJECT_DIR: toBashPath(worktreeDir)
       }
     }).toString();
 

@@ -52,6 +52,16 @@ function writeInstallComponentsManifest(testDir, components) {
   });
 }
 
+function stripShebang(source) {
+  let s = source;
+  if (s.charCodeAt(0) === 0xFEFF) s = s.slice(1);
+  if (s.startsWith('#!')) {
+    const nl = s.indexOf('\n');
+    s = nl === -1 ? '' : s.slice(nl + 1);
+  }
+  return s;
+}
+
 /**
  * Run modified source via a temp file (avoids Windows node -e shebang issues).
  * The temp file is written inside the repo so require() can resolve node_modules.
@@ -95,8 +105,8 @@ function runValidatorWithDir(validatorName, dirConstant, overridePath) {
   // Read the validator source, replace the directory constant, and run as a wrapper
   let source = fs.readFileSync(validatorPath, 'utf8');
 
-  // Remove the shebang line (Windows node cannot parse shebangs in eval/inline mode)
-  source = source.replace(/^#!.*\n/, '');
+  // Remove the shebang line so wrappers also work against CRLF-checked-out files on Windows.
+  source = stripShebang(source);
 
   // Replace the directory constant with our override path
   const dirRegex = new RegExp(`const ${dirConstant} = .*?;`);
@@ -113,7 +123,7 @@ function runValidatorWithDir(validatorName, dirConstant, overridePath) {
 function runValidatorWithDirs(validatorName, overrides) {
   const validatorPath = path.join(validatorsDir, `${validatorName}.js`);
   let source = fs.readFileSync(validatorPath, 'utf8');
-  source = source.replace(/^#!.*\n/, '');
+  source = stripShebang(source);
   for (const [constant, overridePath] of Object.entries(overrides)) {
     const dirRegex = new RegExp(`const ${constant} = .*?;`);
     source = source.replace(dirRegex, `const ${constant} = ${JSON.stringify(overridePath)};`);
@@ -145,7 +155,7 @@ function runValidator(validatorName) {
 function runCatalogValidator(overrides = {}) {
   const validatorPath = path.join(validatorsDir, 'catalog.js');
   let source = fs.readFileSync(validatorPath, 'utf8');
-  source = source.replace(/^#!.*\n/, '');
+  source = stripShebang(source);
   source = `process.argv.push('--text');\n${source}`;
 
   const resolvedOverrides = {
@@ -201,6 +211,11 @@ function runTests() {
   // validate-agents.js
   // ==========================================
   console.log('validate-agents.js:');
+
+  if (test('strips CRLF shebangs before writing temp wrappers', () => {
+    const source = '#!/usr/bin/env node\r\nconsole.log("ok");';
+    assert.strictEqual(stripShebang(source), 'console.log("ok");');
+  })) passed++; else failed++;
 
   if (test('passes on real project agents', () => {
     const result = runValidator('validate-agents');
