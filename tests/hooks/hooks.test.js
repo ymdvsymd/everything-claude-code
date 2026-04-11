@@ -527,24 +527,6 @@ async function runTests() {
     passed++;
   else failed++;
 
-  // insaits-security-wrapper.js tests
-  console.log('\ninsaits-security-wrapper.js:');
-
-  if (
-    await asyncTest('passes through input unchanged when integration is disabled', async () => {
-      const stdinData = JSON.stringify({
-        tool_name: 'Write',
-        tool_input: { file_path: 'src/index.ts', content: 'console.log("ok");' }
-      });
-      const result = await runScript(path.join(scriptsDir, 'insaits-security-wrapper.js'), stdinData, { ECC_ENABLE_INSAITS: '' });
-      assert.strictEqual(result.code, 0, `Exit code should be 0, got ${result.code}`);
-      assert.strictEqual(result.stdout, stdinData, 'Should pass stdin through unchanged');
-      assert.strictEqual(result.stderr, '', 'Should stay silent when integration is disabled');
-    })
-  )
-    passed++;
-  else failed++;
-
   // check-console-log.js tests
   console.log('\ncheck-console-log.js:');
 
@@ -1221,9 +1203,14 @@ async function runTests() {
       fs.writeFileSync(path.join(rootDir, '.prettierrc'), '{}');
       fs.writeFileSync(filePath, 'export const value = 1;\n');
       createCommandShim(binDir, 'npx', logFile);
+      const isolatedHome = path.join(testDir, 'isolated-home');
+      fs.mkdirSync(path.join(isolatedHome, '.claude'), { recursive: true });
 
       const stdinJson = JSON.stringify({ tool_input: { file_path: filePath } });
-      const result = await runScript(path.join(scriptsDir, 'post-edit-format.js'), stdinJson, withPrependedPath(binDir));
+      const result = await runScript(path.join(scriptsDir, 'post-edit-format.js'), stdinJson, withPrependedPath(binDir, {
+        HOME: isolatedHome,
+        USERPROFILE: isolatedHome
+      }));
 
       assert.strictEqual(result.code, 0, 'Should exit 0 for config-only repo');
       const logEntries = readCommandLog(logFile);
@@ -1953,19 +1940,50 @@ async function runTests() {
       const sessionStartHook = hooks.hooks.SessionStart?.[0]?.hooks?.[0];
 
       assert.ok(sessionStartHook, 'Should define a SessionStart hook');
-      assert.ok(sessionStartHook.command.startsWith('node -e "'), 'SessionStart should use inline node resolver');
-      assert.ok(sessionStartHook.command.includes('session:start'), 'SessionStart should invoke the session:start profile');
-      assert.ok(sessionStartHook.command.includes('run-with-flags.js'), 'SessionStart should resolve the runner script');
-      assert.ok(sessionStartHook.command.includes('CLAUDE_PLUGIN_ROOT'), 'SessionStart should consult CLAUDE_PLUGIN_ROOT');
-      assert.ok(sessionStartHook.command.includes('plugins'), 'SessionStart should probe known plugin roots');
+      // The bootstrap was extracted to a standalone file to avoid shell history
+      // expansion of `!` characters that caused startup hook errors when the
+      // logic was embedded as an inline `node -e "..."` string.
+      assert.ok(
+        sessionStartHook.command.includes('session-start-bootstrap.js'),
+        'SessionStart should delegate to the extracted bootstrap script'
+      );
+      assert.ok(sessionStartHook.command.includes('CLAUDE_PLUGIN_ROOT'), 'SessionStart should use CLAUDE_PLUGIN_ROOT');
       assert.ok(!sessionStartHook.command.includes('find '), 'Should not scan arbitrary plugin paths with find');
       assert.ok(!sessionStartHook.command.includes('head -n 1'), 'Should not pick the first matching plugin path');
+
+      // Verify the bootstrap script itself contains the expected logic
+      const bootstrapPath = path.join(__dirname, '..', '..', 'scripts', 'hooks', 'session-start-bootstrap.js');
+      assert.ok(fs.existsSync(bootstrapPath), 'Bootstrap script should exist at scripts/hooks/session-start-bootstrap.js');
+      const bootstrapSrc = fs.readFileSync(bootstrapPath, 'utf8');
+      assert.ok(bootstrapSrc.includes('session:start'), 'Bootstrap should invoke the session:start profile');
+      assert.ok(bootstrapSrc.includes('run-with-flags.js'), 'Bootstrap should resolve the runner script');
+      assert.ok(bootstrapSrc.includes('CLAUDE_PLUGIN_ROOT'), 'Bootstrap should consult CLAUDE_PLUGIN_ROOT');
+      assert.ok(bootstrapSrc.includes('plugins'), 'Bootstrap should probe known plugin roots');
     })
   )
     passed++;
   else failed++;
   if (
-    test('script references use CLAUDE_PLUGIN_ROOT variable or safe SessionStart inline resolver', () => {
+    test('Stop and SessionEnd hooks use the safe inline resolver when plugin root may be unset', () => {
+      const hooksPath = path.join(__dirname, '..', '..', 'hooks', 'hooks.json');
+      const hooks = JSON.parse(fs.readFileSync(hooksPath, 'utf8'));
+      const stopHooks = (hooks.hooks.Stop || []).flatMap(entry => entry.hooks || []);
+      const sessionEndHooks = (hooks.hooks.SessionEnd || []).flatMap(entry => entry.hooks || []);
+
+      for (const hook of [...stopHooks, ...sessionEndHooks]) {
+        assert.ok(hook.command.startsWith('node -e "'), 'Lifecycle hook should use inline node resolver');
+        assert.ok(hook.command.includes('run-with-flags.js'), 'Lifecycle hook should resolve the runner script');
+        assert.ok(hook.command.includes('CLAUDE_PLUGIN_ROOT'), 'Lifecycle hook should consult CLAUDE_PLUGIN_ROOT');
+        assert.ok(hook.command.includes('plugins'), 'Lifecycle hook should probe known plugin roots');
+        assert.ok(!hook.command.includes('find '), 'Lifecycle hook should not scan arbitrary plugin paths with find');
+        assert.ok(!hook.command.includes('head -n 1'), 'Lifecycle hook should not pick the first matching plugin path');
+      }
+    })
+  )
+    passed++;
+  else failed++;
+  if (
+    test('script references use CLAUDE_PLUGIN_ROOT variable or a safe inline resolver', () => {
       const hooksPath = path.join(__dirname, '..', '..', 'hooks', 'hooks.json');
       const hooks = JSON.parse(fs.readFileSync(hooksPath, 'utf8'));
 
@@ -1973,9 +1991,8 @@ async function runTests() {
         for (const entry of hookArray) {
           for (const hook of entry.hooks) {
             if (hook.type === 'command' && hook.command.includes('scripts/hooks/')) {
-              // Check for the literal string "${CLAUDE_PLUGIN_ROOT}" in the command
-              const isSessionStartInlineResolver = hook.command.startsWith('node -e') && hook.command.includes('session:start') && hook.command.includes('run-with-flags.js');
-              const hasPluginRoot = hook.command.includes('${CLAUDE_PLUGIN_ROOT}') || isSessionStartInlineResolver;
+              const usesInlineResolver = hook.command.startsWith('node -e') && hook.command.includes('run-with-flags.js');
+              const hasPluginRoot = hook.command.includes('${CLAUDE_PLUGIN_ROOT}') || usesInlineResolver;
               assert.ok(hasPluginRoot, `Script paths should use CLAUDE_PLUGIN_ROOT: ${hook.command.substring(0, 80)}...`);
             }
           }
@@ -1990,20 +2007,6 @@ async function runTests() {
     passed++;
   else failed++;
 
-  if (
-    test('InsAIts hook is opt-in and scoped to high-signal tool inputs', () => {
-      const hooksPath = path.join(__dirname, '..', '..', 'hooks', 'hooks.json');
-      const hooks = JSON.parse(fs.readFileSync(hooksPath, 'utf8'));
-      const insaitsHook = hooks.hooks.PreToolUse.find(entry => entry.description && entry.description.includes('InsAIts'));
-
-      assert.ok(insaitsHook, 'Should define an InsAIts PreToolUse hook');
-      assert.strictEqual(insaitsHook.matcher, 'Bash|Write|Edit|MultiEdit', 'InsAIts hook should avoid matching every tool');
-      assert.ok(insaitsHook.description.includes('ECC_ENABLE_INSAITS=1'), 'InsAIts hook should document explicit opt-in');
-      assert.ok(insaitsHook.hooks[0].command.includes('insaits-security-wrapper.js'), 'InsAIts hook should execute through the JS wrapper');
-    })
-  )
-    passed++;
-  else failed++;
 
   // plugin.json validation
   console.log('\nplugin.json Validation:');
@@ -2426,10 +2429,13 @@ async function runTests() {
       const observerLoopSource = fs.readFileSync(path.join(__dirname, '..', '..', 'skills', 'continuous-learning-v2', 'agents', 'observer-loop.sh'), 'utf8');
 
       assert.ok(observerLoopSource.includes('ECC_OBSERVER_MAX_TURNS'), 'observer-loop should allow max-turn overrides');
-      assert.ok(observerLoopSource.includes('max_turns="${ECC_OBSERVER_MAX_TURNS:-10}"'), 'observer-loop should default to 10 turns');
+      assert.ok(observerLoopSource.includes('max_turns="${ECC_OBSERVER_MAX_TURNS:-20}"'), 'observer-loop should default to 20 turns');
       assert.ok(!observerLoopSource.includes('--max-turns 3'), 'observer-loop should not hardcode a 3-turn limit');
       assert.ok(observerLoopSource.includes('ECC_SKIP_OBSERVE=1'), 'observer-loop should suppress observe.sh for automated sessions');
       assert.ok(observerLoopSource.includes('ECC_HOOK_PROFILE=minimal'), 'observer-loop should run automated analysis with the minimal hook profile');
+      assert.ok(observerLoopSource.includes('prompt_content="$(cat "$prompt_file" 2>/dev/null || true)"'), 'observer-loop should read prompt_file into memory before claude is spawned');
+      assert.ok(observerLoopSource.includes('-p "$prompt_content"'), 'observer-loop should pass in-memory prompt content to claude');
+      assert.ok(!observerLoopSource.includes('-p "$(cat "$prompt_file")"'), 'observer-loop should not re-read prompt_file at invocation time');
     })
   )
     passed++;
@@ -4238,6 +4244,42 @@ async function runTests() {
         const additionalContext = getSessionStartAdditionalContext(result.stdout);
         assert.ok(additionalContext.includes('RECENT CONTENT HERE'), 'Should inject the 6.9-day-old session content');
         assert.ok(!additionalContext.includes('OLD CONTENT SHOULD NOT APPEAR'), 'Should NOT inject the 8-day-old session content');
+      } finally {
+        fs.rmSync(isoHome, { recursive: true, force: true });
+      }
+    })
+  )
+    passed++;
+  else failed++;
+
+  if (
+    await asyncTest('prunes session files older than the retention window', async () => {
+      const isoHome = path.join(os.tmpdir(), `ecc-start-prune-${Date.now()}`);
+      const sessionsDir = getCanonicalSessionsDir(isoHome);
+      fs.mkdirSync(sessionsDir, { recursive: true });
+      fs.mkdirSync(path.join(isoHome, '.claude', 'skills', 'learned'), { recursive: true });
+
+      const recentFile = path.join(sessionsDir, '2026-02-10-keepme-session.tmp');
+      fs.writeFileSync(recentFile, '# Recent Session\n\nKEEP ME');
+      const fiveDaysAgo = new Date(Date.now() - 5 * 24 * 60 * 60 * 1000);
+      fs.utimesSync(recentFile, fiveDaysAgo, fiveDaysAgo);
+
+      const expiredFile = path.join(sessionsDir, '2026-01-01-pruneme-session.tmp');
+      fs.writeFileSync(expiredFile, '# Expired Session\n\nDELETE ME');
+      const thirtyOneDaysAgo = new Date(Date.now() - 31 * 24 * 60 * 60 * 1000);
+      fs.utimesSync(expiredFile, thirtyOneDaysAgo, thirtyOneDaysAgo);
+
+      try {
+        const result = await runScript(path.join(scriptsDir, 'session-start.js'), '', {
+          HOME: isoHome,
+          USERPROFILE: isoHome,
+          ECC_SESSION_RETENTION_DAYS: '30',
+        });
+
+        assert.strictEqual(result.code, 0);
+        assert.ok(!fs.existsSync(expiredFile), 'Should delete expired session files beyond retention');
+        assert.ok(fs.existsSync(recentFile), 'Should keep recent session files inside retention');
+        assert.ok(result.stderr.includes('Pruned 1 expired session'), `Should report pruning activity, stderr: ${result.stderr}`);
       } finally {
         fs.rmSync(isoHome, { recursive: true, force: true });
       }

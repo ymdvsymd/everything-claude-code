@@ -19,6 +19,7 @@
 
 const fs = require('fs');
 const path = require('path');
+const { parseDisabledMcpServers } = require('../lib/mcp-config');
 
 let TOML;
 try {
@@ -83,20 +84,23 @@ function dlxServer(name, pkg, extraFields, extraToml) {
 }
 
 /** Each entry: key = section name under mcp_servers, value = { toml, fields } */
+const DEFAULT_MCP_STARTUP_TIMEOUT_SEC = 30;
+const DEFAULT_MCP_STARTUP_TIMEOUT_TOML = `startup_timeout_sec = ${DEFAULT_MCP_STARTUP_TIMEOUT_SEC}`;
+
 const ECC_SERVERS = {
   supabase: dlxServer('supabase', '@supabase/mcp-server-supabase@latest', { startup_timeout_sec: 20.0, tool_timeout_sec: 120.0 }, 'startup_timeout_sec = 20.0\ntool_timeout_sec = 120.0'),
-  playwright: dlxServer('playwright', '@playwright/mcp@latest'),
-  'context7-mcp': dlxServer('context7-mcp', '@upstash/context7-mcp'),
+  playwright: dlxServer('playwright', '@playwright/mcp@latest', { startup_timeout_sec: DEFAULT_MCP_STARTUP_TIMEOUT_SEC }, DEFAULT_MCP_STARTUP_TIMEOUT_TOML),
+  context7: dlxServer('context7', '@upstash/context7-mcp@latest', { startup_timeout_sec: DEFAULT_MCP_STARTUP_TIMEOUT_SEC }, DEFAULT_MCP_STARTUP_TIMEOUT_TOML),
   exa: {
     fields: { url: 'https://mcp.exa.ai/mcp' },
     toml: `[mcp_servers.exa]\nurl = "https://mcp.exa.ai/mcp"`
   },
   github: {
-    fields: { command: 'bash', args: ['-lc', GH_BOOTSTRAP] },
-    toml: `[mcp_servers.github]\ncommand = "bash"\nargs = ["-lc", ${JSON.stringify(GH_BOOTSTRAP)}]`
+    fields: { command: 'bash', args: ['-lc', GH_BOOTSTRAP], startup_timeout_sec: DEFAULT_MCP_STARTUP_TIMEOUT_SEC },
+    toml: `[mcp_servers.github]\ncommand = "bash"\nargs = ["-lc", ${JSON.stringify(GH_BOOTSTRAP)}]\n${DEFAULT_MCP_STARTUP_TIMEOUT_TOML}`
   },
-  memory: dlxServer('memory', '@modelcontextprotocol/server-memory'),
-  'sequential-thinking': dlxServer('sequential-thinking', '@modelcontextprotocol/server-sequential-thinking')
+  memory: dlxServer('memory', '@modelcontextprotocol/server-memory', { startup_timeout_sec: DEFAULT_MCP_STARTUP_TIMEOUT_SEC }, DEFAULT_MCP_STARTUP_TIMEOUT_TOML),
+  'sequential-thinking': dlxServer('sequential-thinking', '@modelcontextprotocol/server-sequential-thinking', { startup_timeout_sec: DEFAULT_MCP_STARTUP_TIMEOUT_SEC }, DEFAULT_MCP_STARTUP_TIMEOUT_TOML)
 };
 
 // Append --features arg for supabase after dlxServer builds the base
@@ -104,9 +108,9 @@ ECC_SERVERS.supabase.fields.args.push('--features=account,docs,database,debuggin
 ECC_SERVERS.supabase.toml = ECC_SERVERS.supabase.toml.replace(/^(args = \[.*)\]$/m, '$1, "--features=account,docs,database,debugging,development,functions,storage,branching"]');
 
 // Legacy section names that should be treated as an existing ECC server.
-// e.g. old configs shipped [mcp_servers.context7] instead of [mcp_servers.context7-mcp].
+// e.g. older configs shipped [mcp_servers.context7-mcp] instead of [mcp_servers.context7].
 const LEGACY_ALIASES = {
-  'context7-mcp': ['context7']
+  context7: ['context7-mcp']
 };
 
 // ---------------------------------------------------------------------------
@@ -207,6 +211,7 @@ function main() {
   const configPath = args.find(a => !a.startsWith('-'));
   const dryRun = args.includes('--dry-run');
   const updateMcp = args.includes('--update-mcp');
+  const disabledServers = new Set(parseDisabledMcpServers(process.env.ECC_DISABLED_MCPS));
 
   if (!configPath) {
     console.error('Usage: merge-mcp-config.js <config.toml> [--dry-run] [--update-mcp]');
@@ -219,6 +224,9 @@ function main() {
   }
 
   log(`Package manager: ${PM_NAME} (exec: ${PM_EXEC})`);
+  if (disabledServers.size > 0) {
+    log(`Disabled via ECC_DISABLED_MCPS: ${[...disabledServers].join(', ')}`);
+  }
 
   let raw = fs.readFileSync(configPath, 'utf8');
   let parsed;
@@ -246,6 +254,18 @@ function main() {
     const finalEntry = resolvedEntry || urlEntry;
     const resolvedLabel = hasCanonical ? name : legacyName || name;
 
+    if (disabledServers.has(name)) {
+      if (finalEntry) {
+        toRemoveLog.push(`mcp_servers.${resolvedLabel} (disabled)`);
+        raw = removeServerFromText(raw, resolvedLabel, existing);
+        if (resolvedLabel !== name) {
+          raw = removeServerFromText(raw, name, existing);
+        }
+      }
+      log(`  [skip] mcp_servers.${name} (disabled)`);
+      continue;
+    }
+
     if (finalEntry) {
       if (updateMcp) {
         // --update-mcp: remove existing section (and legacy alias), will re-add below
@@ -253,6 +273,10 @@ function main() {
         raw = removeServerFromText(raw, resolvedLabel, existing);
         if (resolvedLabel !== name) {
           raw = removeServerFromText(raw, name, existing);
+        }
+        if (legacyName && hasCanonical) {
+          toRemoveLog.push(`mcp_servers.${legacyName}`);
+          raw = removeServerFromText(raw, legacyName, existing);
         }
         toAppend.push(spec.toml);
       } else {
@@ -271,7 +295,9 @@ function main() {
     }
   }
 
-  if (toAppend.length === 0) {
+  const hasRemovals = toRemoveLog.length > 0;
+
+  if (toAppend.length === 0 && !hasRemovals) {
     log('All ECC MCP servers already present. Nothing to do.');
     return;
   }
@@ -290,12 +316,17 @@ function main() {
 
   // Write: for add-only, append to preserve existing content byte-for-byte.
   // For --update-mcp, we modified `raw` above, so write the full file + appended sections.
-  if (updateMcp) {
+  if (updateMcp || hasRemovals) {
     for (const label of toRemoveLog) log(`  [update] ${label}`);
     const cleaned = raw.replace(/\n+$/, '\n');
-    fs.writeFileSync(configPath, cleaned + appendText, 'utf8');
+    fs.writeFileSync(configPath, cleaned + (toAppend.length > 0 ? appendText : ''), 'utf8');
   } else {
     fs.appendFileSync(configPath, appendText, 'utf8');
+  }
+
+  if (hasRemovals && toAppend.length === 0) {
+    log(`Done. Removed ${toRemoveLog.length} disabled server(s).`);
+    return;
   }
 
   log(`Done. ${toAppend.length} server(s) ${updateMcp ? 'updated' : 'added'}.`);

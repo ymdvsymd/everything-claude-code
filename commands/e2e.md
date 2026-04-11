@@ -1,123 +1,26 @@
 ---
-description: Generate and run end-to-end tests with Playwright. Creates test journeys, runs tests, captures screenshots/videos/traces, and uploads artifacts.
+description: Legacy slash-entry shim for the e2e-testing skill. Prefer the skill directly.
 ---
 
-# E2E Command
+# E2E Command (Legacy Shim)
 
-This command invokes the **e2e-runner** agent to generate, maintain, and execute end-to-end tests using Playwright.
+Use this only if you still invoke `/e2e`. The maintained workflow lives in `skills/e2e-testing/SKILL.md`.
 
-## What This Command Does
+## Canonical Surface
 
-1. **Generate Test Journeys** - Create Playwright tests for user flows
-2. **Run E2E Tests** - Execute tests across browsers
-3. **Capture Artifacts** - Screenshots, videos, traces on failures
-4. **Upload Results** - HTML reports and JUnit XML
-5. **Identify Flaky Tests** - Quarantine unstable tests
+- Prefer the `e2e-testing` skill directly.
+- Keep this file only as a compatibility entry point.
 
-## When to Use
+## Arguments
 
-Use `/e2e` when:
-- Testing critical user journeys (login, trading, payments)
-- Verifying multi-step flows work end-to-end
-- Testing UI interactions and navigation
-- Validating integration between frontend and backend
-- Preparing for production deployment
+`$ARGUMENTS`
 
-## How It Works
+## Delegation
 
-The e2e-runner agent will:
-
-1. **Analyze user flow** and identify test scenarios
-2. **Generate Playwright test** using Page Object Model pattern
-3. **Run tests** across multiple browsers (Chrome, Firefox, Safari)
-4. **Capture failures** with screenshots, videos, and traces
-5. **Generate report** with results and artifacts
-6. **Identify flaky tests** and recommend fixes
-
-## Example Usage
-
-```
-User: /e2e Test the market search and view flow
-
-Agent (e2e-runner):
-# E2E Test Generation: Market Search and View Flow
-
-## Test Scenario Identified
-
-**User Journey:** Market Search → View Results → Click Market → View Details
-
-**Test Coverage:**
-1. Navigate to markets page
-2. Perform semantic search
-3. Verify search results
-4. Click on first result
-5. Verify market details page loads
-6. Verify chart renders
-
-## Generated Test Code
-
-```typescript
-// tests/e2e/markets/search-and-view.spec.ts
-import { test, expect } from '@playwright/test'
-import { MarketsPage } from '../../pages/MarketsPage'
-import { MarketDetailsPage } from '../../pages/MarketDetailsPage'
-
-test.describe('Market Search and View Flow', () => {
-  test('user can search markets and view details', async ({ page }) => {
-    // 1. Navigate to markets page
-    const marketsPage = new MarketsPage(page)
-    await marketsPage.goto()
-
-    // Verify page loaded
-    await expect(page).toHaveTitle(/Markets/)
-    await expect(page.locator('h1')).toContainText('Markets')
-
-    // 2. Perform semantic search
-    await marketsPage.searchMarkets('election')
-
-    // Wait for API response
-    await page.waitForResponse(resp =>
-      resp.url().includes('/api/markets/search') && resp.status() === 200
-    )
-
-    // 3. Verify search results
-    const marketCards = marketsPage.marketCards
-    await expect(marketCards.first()).toBeVisible()
-    const resultCount = await marketCards.count()
-    expect(resultCount).toBeGreaterThan(0)
-
-    // Take screenshot of search results
-    await page.screenshot({ path: 'artifacts/search-results.png' })
-
-    // 4. Click on first result
-    const firstMarketTitle = await marketCards.first().textContent()
-    await marketCards.first().click()
-
-    // 5. Verify market details page loads
-    await expect(page).toHaveURL(/\/markets\/[a-z0-9-]+/)
-
-    const detailsPage = new MarketDetailsPage(page)
-    await expect(detailsPage.marketName).toBeVisible()
-    await expect(detailsPage.marketDescription).toBeVisible()
-
-    // 6. Verify chart renders
-    await expect(detailsPage.priceChart).toBeVisible()
-
-    // Verify market name matches
-    const detailsTitle = await detailsPage.marketName.textContent()
-    expect(detailsTitle?.toLowerCase()).toContain(
-      firstMarketTitle?.toLowerCase().substring(0, 20) || ''
-    )
-
-    // Take screenshot of market details
-    await page.screenshot({ path: 'artifacts/market-details.png' })
-  })
-
-  test('search with no results shows empty state', async ({ page }) => {
-    const marketsPage = new MarketsPage(page)
-    await marketsPage.goto()
-
-    // Search for non-existent market
+Apply the `e2e-testing` skill.
+- Generate or update Playwright coverage for the requested user flow.
+- Run only the relevant tests unless the user explicitly asked for the entire suite.
+- Capture the usual artifacts and report failures, flake risk, and next fixes without duplicating the full skill body here.
     await marketsPage.searchMarkets('xyznonexistentmarket123456')
 
     // Verify empty state
@@ -182,7 +85,7 @@ Artifacts generated:
 ╔══════════════════════════════════════════════════════════════╗
 ║                    E2E Test Results                          ║
 ╠══════════════════════════════════════════════════════════════╣
-║ Status:     ✅ ALL TESTS PASSED                              ║
+║ Status:     PASS: ALL TESTS PASSED                              ║
 ║ Total:      3 tests                                          ║
 ║ Passed:     3 (100%)                                         ║
 ║ Failed:     0                                                ║
@@ -191,15 +94,15 @@ Artifacts generated:
 ╚══════════════════════════════════════════════════════════════╝
 
 Artifacts:
-📸 Screenshots: 2 files
-📹 Videos: 0 files (only on failure)
-🔍 Traces: 0 files (only on failure)
-📊 HTML Report: playwright-report/index.html
+ Screenshots: 2 files
+ Videos: 0 files (only on failure)
+ Traces: 0 files (only on failure)
+ HTML Report: playwright-report/index.html
 
 View report: npx playwright show-report
 ```
 
-✅ E2E test suite ready for CI/CD integration!
+PASS: E2E test suite ready for CI/CD integration!
 ```
 
 ## Test Artifacts
@@ -235,7 +138,7 @@ open artifacts/search-results.png
 If a test fails intermittently:
 
 ```
-⚠️  FLAKY TEST DETECTED: tests/e2e/markets/trade.spec.ts
+WARNING:  FLAKY TEST DETECTED: tests/e2e/markets/trade.spec.ts
 
 Test passed 7/10 runs (70% pass rate)
 
@@ -254,10 +157,10 @@ Quarantine recommendation: Mark as test.fixme() until fixed
 ## Browser Configuration
 
 Tests run on multiple browsers by default:
-- ✅ Chromium (Desktop Chrome)
-- ✅ Firefox (Desktop)
-- ✅ WebKit (Desktop Safari)
-- ✅ Mobile Chrome (optional)
+- PASS: Chromium (Desktop Chrome)
+- PASS: Firefox (Desktop)
+- PASS: WebKit (Desktop Safari)
+- PASS: Mobile Chrome (optional)
 
 Configure in `playwright.config.ts` to adjust browsers.
 
@@ -285,7 +188,7 @@ Add to your CI pipeline:
 
 For PMX, prioritize these E2E tests:
 
-**🔴 CRITICAL (Must Always Pass):**
+**CRITICAL (Must Always Pass):**
 1. User can connect wallet
 2. User can browse markets
 3. User can search markets (semantic search)
@@ -294,7 +197,7 @@ For PMX, prioritize these E2E tests:
 6. Market resolves correctly
 7. User can withdraw funds
 
-**🟡 IMPORTANT:**
+**IMPORTANT:**
 1. Market creation flow
 2. User profile updates
 3. Real-time price updates
@@ -305,20 +208,20 @@ For PMX, prioritize these E2E tests:
 ## Best Practices
 
 **DO:**
-- ✅ Use Page Object Model for maintainability
-- ✅ Use data-testid attributes for selectors
-- ✅ Wait for API responses, not arbitrary timeouts
-- ✅ Test critical user journeys end-to-end
-- ✅ Run tests before merging to main
-- ✅ Review artifacts when tests fail
+- PASS: Use Page Object Model for maintainability
+- PASS: Use data-testid attributes for selectors
+- PASS: Wait for API responses, not arbitrary timeouts
+- PASS: Test critical user journeys end-to-end
+- PASS: Run tests before merging to main
+- PASS: Review artifacts when tests fail
 
 **DON'T:**
-- ❌ Use brittle selectors (CSS classes can change)
-- ❌ Test implementation details
-- ❌ Run tests against production
-- ❌ Ignore flaky tests
-- ❌ Skip artifact review on failures
-- ❌ Test every edge case with E2E (use unit tests)
+- FAIL: Use brittle selectors (CSS classes can change)
+- FAIL: Test implementation details
+- FAIL: Run tests against production
+- FAIL: Ignore flaky tests
+- FAIL: Skip artifact review on failures
+- FAIL: Test every edge case with E2E (use unit tests)
 
 ## Important Notes
 

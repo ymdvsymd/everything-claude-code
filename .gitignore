@@ -75,6 +75,9 @@ examples/sessions/*.tmp
 # Local drafts
 marketing/
 .dmux/
+.dmux-hooks/
+.claude/worktrees/
+.claude/scheduled_tasks.lock
 
 # Temporary files
 tmp/
@@ -82,6 +85,9 @@ temp/
 *.tmp
 *.bak
 *.backup
+
+# Observer temp files (continuous-learning-v2)
+.observer-tmp/
 
 # Rust build artifacts
 ecc2/target/

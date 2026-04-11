@@ -1,123 +1,26 @@
 ---
-description: Enforce test-driven development workflow. Scaffold interfaces, generate tests FIRST, then implement minimal code to pass. Ensure 80%+ coverage.
+description: Legacy slash-entry shim for the tdd-workflow skill. Prefer the skill directly.
 ---
 
-# TDD Command
+# TDD Command (Legacy Shim)
 
-This command invokes the **tdd-guide** agent to enforce test-driven development methodology.
+Use this only if you still invoke `/tdd`. The maintained workflow lives in `skills/tdd-workflow/SKILL.md`.
 
-## What This Command Does
+## Canonical Surface
 
-1. **Scaffold Interfaces** - Define types/interfaces first
-2. **Generate Tests First** - Write failing tests (RED)
-3. **Implement Minimal Code** - Write just enough to pass (GREEN)
-4. **Refactor** - Improve code while keeping tests green (REFACTOR)
-5. **Verify Coverage** - Ensure 80%+ test coverage
+- Prefer the `tdd-workflow` skill directly.
+- Keep this file only as a compatibility entry point.
 
-## When to Use
+## Arguments
 
-Use `/tdd` when:
-- Implementing new features
-- Adding new functions/components
-- Fixing bugs (write test that reproduces bug first)
-- Refactoring existing code
-- Building critical business logic
+`$ARGUMENTS`
 
-## How It Works
+## Delegation
 
-The tdd-guide agent will:
-
-1. **Define interfaces** for inputs/outputs
-2. **Write tests that will FAIL** (because code doesn't exist yet)
-3. **Run tests** and verify they fail for the right reason
-4. **Write minimal implementation** to make tests pass
-5. **Run tests** and verify they pass
-6. **Refactor** code while keeping tests green
-7. **Check coverage** and add more tests if below 80%
-
-## TDD Cycle
-
-```
-RED → GREEN → REFACTOR → REPEAT
-
-RED:      Write a failing test
-GREEN:    Write minimal code to pass
-REFACTOR: Improve code, keep tests passing
-REPEAT:   Next feature/scenario
-```
-
-## Example Usage
-
-```
-User: /tdd I need a function to calculate market liquidity score
-
-Agent (tdd-guide):
-# TDD Session: Market Liquidity Score Calculator
-
-## Step 1: Define Interface (SCAFFOLD)
-
-```typescript
-// lib/liquidity.ts
-export interface MarketData {
-  totalVolume: number
-  bidAskSpread: number
-  activeTraders: number
-  lastTradeTime: Date
-}
-
-export function calculateLiquidityScore(market: MarketData): number {
-  // TODO: Implementation
-  throw new Error('Not implemented')
-}
-```
-
-## Step 2: Write Failing Test (RED)
-
-```typescript
-// lib/liquidity.test.ts
-import { calculateLiquidityScore } from './liquidity'
-
-describe('calculateLiquidityScore', () => {
-  it('should return high score for liquid market', () => {
-    const market = {
-      totalVolume: 100000,
-      bidAskSpread: 0.01,
-      activeTraders: 500,
-      lastTradeTime: new Date()
-    }
-
-    const score = calculateLiquidityScore(market)
-
-    expect(score).toBeGreaterThan(80)
-    expect(score).toBeLessThanOrEqual(100)
-  })
-
-  it('should return low score for illiquid market', () => {
-    const market = {
-      totalVolume: 100,
-      bidAskSpread: 0.5,
-      activeTraders: 2,
-      lastTradeTime: new Date(Date.now() - 86400000) // 1 day ago
-    }
-
-    const score = calculateLiquidityScore(market)
-
-    expect(score).toBeLessThan(30)
-    expect(score).toBeGreaterThanOrEqual(0)
-  })
-
-  it('should handle edge case: zero volume', () => {
-    const market = {
-      totalVolume: 0,
-      bidAskSpread: 0,
-      activeTraders: 0,
-      lastTradeTime: new Date()
-    }
-
-    const score = calculateLiquidityScore(market)
-
-    expect(score).toBe(0)
-  })
+Apply the `tdd-workflow` skill.
+- Stay strict on RED -> GREEN -> REFACTOR.
+- Keep tests first, coverage explicit, and checkpoint evidence clear.
+- Use the skill as the maintained TDD body instead of duplicating the playbook here.
 })
 ```
 
@@ -133,7 +36,7 @@ FAIL lib/liquidity.test.ts
 1 test failed, 0 passed
 ```
 
-✅ Tests fail as expected. Ready to implement.
+PASS: Tests fail as expected. Ready to implement.
 
 ## Step 4: Implement Minimal Code (GREEN)
 
@@ -179,7 +82,7 @@ PASS lib/liquidity.test.ts
 3 tests passed
 ```
 
-✅ All tests passing!
+PASS: All tests passing!
 
 ## Step 6: Refactor (IMPROVE)
 
@@ -236,7 +139,7 @@ PASS lib/liquidity.test.ts
 3 tests passed
 ```
 
-✅ Refactoring complete, tests still passing!
+PASS: Refactoring complete, tests still passing!
 
 ## Step 8: Check Coverage
 
@@ -247,29 +150,29 @@ File           | % Stmts | % Branch | % Funcs | % Lines
 ---------------|---------|----------|---------|--------
 liquidity.ts   |   100   |   100    |   100   |   100
 
-Coverage: 100% ✅ (Target: 80%)
+Coverage: 100% PASS: (Target: 80%)
 ```
 
-✅ TDD session complete!
+PASS: TDD session complete!
 ```
 
 ## TDD Best Practices
 
 **DO:**
-- ✅ Write the test FIRST, before any implementation
-- ✅ Run tests and verify they FAIL before implementing
-- ✅ Write minimal code to make tests pass
-- ✅ Refactor only after tests are green
-- ✅ Add edge cases and error scenarios
-- ✅ Aim for 80%+ coverage (100% for critical code)
+- PASS: Write the test FIRST, before any implementation
+- PASS: Run tests and verify they FAIL before implementing
+- PASS: Write minimal code to make tests pass
+- PASS: Refactor only after tests are green
+- PASS: Add edge cases and error scenarios
+- PASS: Aim for 80%+ coverage (100% for critical code)
 
 **DON'T:**
-- ❌ Write implementation before tests
-- ❌ Skip running tests after each change
-- ❌ Write too much code at once
-- ❌ Ignore failing tests
-- ❌ Test implementation details (test behavior)
-- ❌ Mock everything (prefer integration tests)
+- FAIL: Write implementation before tests
+- FAIL: Skip running tests after each change
+- FAIL: Write too much code at once
+- FAIL: Ignore failing tests
+- FAIL: Test implementation details (test behavior)
+- FAIL: Mock everything (prefer integration tests)
 
 ## Test Types to Include
 

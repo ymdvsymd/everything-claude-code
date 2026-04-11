@@ -27,6 +27,8 @@ function test(name, fn) {
 
 // Test suite
 function runTests() {
+  const rocketParty = String.fromCodePoint(0x1F680, 0x1F389);
+  const partyEmoji = String.fromCodePoint(0x1F389);
   console.log('\n=== Testing utils.js ===\n');
 
   let passed = 0;
@@ -56,6 +58,50 @@ function runTests() {
     assert.strictEqual(typeof home, 'string');
     assert.ok(home.length > 0, 'Home dir should not be empty');
     assert.ok(fs.existsSync(home), 'Home dir should exist');
+  })) passed++; else failed++;
+
+  if (test('getHomeDir prefers HOME override when set', () => {
+    const originalHome = process.env.HOME;
+    const originalUserProfile = process.env.USERPROFILE;
+    const fakeHome = path.join(process.cwd(), 'tmp-home-override');
+    try {
+      process.env.HOME = fakeHome;
+      process.env.USERPROFILE = '';
+      assert.strictEqual(utils.getHomeDir(), fakeHome);
+    } finally {
+      if (originalHome === undefined) {
+        delete process.env.HOME;
+      } else {
+        process.env.HOME = originalHome;
+      }
+      if (originalUserProfile === undefined) {
+        delete process.env.USERPROFILE;
+      } else {
+        process.env.USERPROFILE = originalUserProfile;
+      }
+    }
+  })) passed++; else failed++;
+
+  if (test('getHomeDir falls back to USERPROFILE when HOME is empty', () => {
+    const originalHome = process.env.HOME;
+    const originalUserProfile = process.env.USERPROFILE;
+    const fakeHome = path.join(process.cwd(), 'tmp-userprofile-override');
+    try {
+      process.env.HOME = '';
+      process.env.USERPROFILE = fakeHome;
+      assert.strictEqual(utils.getHomeDir(), fakeHome);
+    } finally {
+      if (originalHome === undefined) {
+        delete process.env.HOME;
+      } else {
+        process.env.HOME = originalHome;
+      }
+      if (originalUserProfile === undefined) {
+        delete process.env.USERPROFILE;
+      } else {
+        process.env.USERPROFILE = originalUserProfile;
+      }
+    }
   })) passed++; else failed++;
 
   if (test('getClaudeDir returns path under home', () => {
@@ -166,7 +212,7 @@ function runTests() {
   if (test('sanitizeSessionId returns stable hashes for non-ASCII values', () => {
     const chinese = utils.sanitizeSessionId('我的项目');
     const cyrillic = utils.sanitizeSessionId('проект');
-    const emoji = utils.sanitizeSessionId('🚀🎉');
+    const emoji = utils.sanitizeSessionId(rocketParty);
     assert.ok(/^[a-f0-9]{8}$/.test(chinese), `Expected 8-char hash, got: ${chinese}`);
     assert.ok(/^[a-f0-9]{8}$/.test(cyrillic), `Expected 8-char hash, got: ${cyrillic}`);
     assert.ok(/^[a-f0-9]{8}$/.test(emoji), `Expected 8-char hash, got: ${emoji}`);
@@ -707,7 +753,7 @@ function runTests() {
   if (test('writeFile handles unicode content', () => {
     const testFile = path.join(utils.getTempDir(), `utils-test-${Date.now()}.txt`);
     try {
-      const unicode = '日本語テスト 🚀 émojis';
+      const unicode = `日本語テスト ${String.fromCodePoint(0x1F680)} émojis`;
       utils.writeFile(testFile, unicode);
       const content = utils.readFile(testFile);
       assert.strictEqual(content, unicode);
@@ -1877,8 +1923,8 @@ function runTests() {
     const tmpDir = fs.mkdtempSync(path.join(utils.getTempDir(), 'r108-grep-unicode-'));
     const testFile = path.join(tmpDir, 'test.txt');
     try {
-      fs.writeFileSync(testFile, '🎉 celebration\nnormal line\n🎉 party\n日本語テスト');
-      const emojiResults = utils.grepFile(testFile, /🎉/);
+      fs.writeFileSync(testFile, `${partyEmoji} celebration\nnormal line\n${partyEmoji} party\n日本語テスト`);
+      const emojiResults = utils.grepFile(testFile, new RegExp(partyEmoji, 'u'));
       assert.strictEqual(emojiResults.length, 2,
         'Should find emoji on 2 lines (lines 1 and 3)');
       assert.strictEqual(emojiResults[0].lineNumber, 1);

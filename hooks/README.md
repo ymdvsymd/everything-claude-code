@@ -23,9 +23,9 @@ User request → Claude picks a tool → PreToolUse hook runs → Tool executes 
 | **Dev server blocker** | `Bash` | Blocks `npm run dev` etc. outside tmux — ensures log access | 2 (blocks) |
 | **Tmux reminder** | `Bash` | Suggests tmux for long-running commands (npm test, cargo build, docker) | 0 (warns) |
 | **Git push reminder** | `Bash` | Reminds to review changes before `git push` | 0 (warns) |
+| **Pre-commit quality check** | `Bash` | Runs quality checks before `git commit`: lints staged files, validates commit message format when provided via `-m/--message`, detects console.log/debugger/secrets | 2 (blocks critical) / 0 (warns) |
 | **Doc file warning** | `Write` | Warns about non-standard `.md`/`.txt` files (allows README, CLAUDE, CONTRIBUTING, CHANGELOG, LICENSE, SKILL, docs/, skills/); cross-platform path handling | 0 (warns) |
 | **Strategic compact** | `Edit\|Write` | Suggests manual `/compact` at logical intervals (every ~50 tool calls) | 0 (warns) |
-| **InsAIts security monitor (opt-in)** | `Bash\|Write\|Edit\|MultiEdit` | Optional security scan for high-signal tool inputs. Disabled unless `ECC_ENABLE_INSAITS=1`. Blocks on critical findings, warns on non-critical, and writes audit log to `.insaits_audit_session.jsonl`. Requires `pip install insa-its`. [Details](../scripts/hooks/insaits-security-monitor.py) | 2 (blocks critical) / 0 (warns) |
 
 ### PostToolUse Hooks
 
@@ -34,6 +34,7 @@ User request → Claude picks a tool → PreToolUse hook runs → Tool executes 
 | **PR logger** | `Bash` | Logs PR URL and review command after `gh pr create` |
 | **Build analysis** | `Bash` | Background analysis after build commands (async, non-blocking) |
 | **Quality gate** | `Edit\|Write\|MultiEdit` | Runs fast quality checks after edits |
+| **Design quality check** | `Edit\|Write\|MultiEdit` | Warns when frontend edits drift toward generic template-looking UI |
 | **Prettier format** | `Edit` | Auto-formats JS/TS files with Prettier after edits |
 | **TypeScript check** | `Edit` | Runs `tsc --noEmit` after editing `.ts`/`.tsx` files |
 | **console.log warning** | `Edit` | Warns about `console.log` statements in edited files |
