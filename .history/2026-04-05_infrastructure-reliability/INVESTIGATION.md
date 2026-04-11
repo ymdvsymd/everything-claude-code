@@ -115,13 +115,59 @@ NOTES, TODO, SCRATCH などのアドホックなドキュメントファイル�
 
 ### 3.1 デュアルディレクトリ対応
 
-セッションの永続化ディレクトリが `~/.claude/sessions/`（レガシー）から `~/.claude/session-data/`（新規）に移行した。ただし後方互換性のため、`getSessionSearchDirs()` が両ディレクトリを検索する。セッション ID の正規化とマッチングロジックが改善され、異なるディレクトリに同一セッションの重複がある場合も正しく処理される。
+ECC 独自のセッションサマリーファイル（日付付き `.tmp` 形式の Markdown）の保存先が `~/.claude/sessions/`（旧 ECC バージョン）から `~/.claude/session-data/`（新規）に移行した。これは Claude Code 本体のセッション機能とは無関係で、ECC の Hook が記録するセッション要約やメタデータの格納先の変更である。後方互換性のため、`getSessionSearchDirs()` が両ディレクトリを検索する。セッション ID の正規化とマッチングロジックが改善され、異なるディレクトリに同一セッションの重複がある場合も正しく処理される。
 
 ### 3.2 セッション活動トラッカー
 
-**ファイル**: `scripts/hooks/session-activity-tracker.js`
+**ファイル**: `scripts/hooks/session-activity-tracker.js`（612行）
+**フェーズ**: PostToolUse
 
-ツールごとの使用状況を `~/.claude/metrics/tool-usage.jsonl` に JSONL 形式で記録する。入力パラメータは深度制限付きでサニタイズされ、AWS キー、GitHub トークン、パスワード、認証ヘッダーが自動的にリダクトされる。ファイルパスは本体から分離して記録され、メトリクスの膨張を防ぐ。このデータは ECC 2.0 の同期パイプラインによって消費される。
+エージェントがツールを使うたびに、その活動を `~/.claude/metrics/tool-usage.jsonl` に1行の JSON として記録する Hook である。記録されたデータは ECC 2.0 のメトリクス同期パイプラインが消費し、TUI ダッシュボードの Log ペインやセッションメトリクスに反映される。
+
+#### 記録される情報
+
+各レコードには以下のフィールドが含まれる:
+
+| フィールド | 内容 | 例 |
+|-----------|------|-----|
+| `id` | ユニーク ID（タイムスタンプ + ランダム hex） | `tool-1712345678-a1b2c3d4e5f6` |
+| `timestamp` | ISO 8601 タイムスタンプ | `2026-04-11T10:30:00.000Z` |
+| `session_id` | `ECC_SESSION_ID` または `CLAUDE_SESSION_ID` | `abc-123` |
+| `tool_name` | 使用されたツール名 | `Edit`, `Bash`, `Write` |
+| `input_summary` | 入力の要約（最大220文字） | `Edit src/auth/validate.ts` |
+| `input_params_json` | サニタイズ済みの入力パラメータ JSON | `{"file_path":"src/auth/..."}` |
+| `output_summary` | 出力の要約（最大220文字） | `File updated successfully` |
+| `file_paths` | 操作対象のファイルパス一覧 | `["src/auth/validate.ts"]` |
+| `file_events` | ファイル操作イベント（アクション + diff プレビュー） | 後述 |
+
+#### シークレットのリダクション
+
+入力・出力に含まれるシークレットは記録前に自動的に `<REDACTED>` に置換される。検出パターンは以下:
+
+- **AWS アクセスキー**: `AKIA...`（16文字）、`ASIA...`（16文字）
+- **GitHub トークン**: `ghp_...`, `gho_...`, `ghs_...`, `github_pat_...`
+- **認証ヘッダー**: `Authorization: ...`
+- **パスワード**: `password=...`
+- **CLI トークン**: `--token=...`
+
+#### ファイル活動イベント
+
+ツール入力から `file_path`, `source_path`, `old_file_path` などのキーを再帰的に探索し、ファイル操作イベント（`file_events`）を構築する。各イベントには:
+
+- **path**: 操作対象のファイルパス
+- **action**: `read`, `create`, `modify`, `delete`, `move`, `touch` のいずれか（ツール名から推定）
+- **diff_preview**: `old_string -> new_string` 形式の変更要約（Edit ツールの場合）
+- **patch_preview**: unified diff 形式のパッチプレビュー（`@@` ヘッダー + `+`/`-` 行）
+
+Write ツールの場合は、Git の作業ツリーから `git diff` を取得して実際の変更内容をパッチプレビューに反映する。既存ファイルへの Write は `create` ではなく `modify` に再分類される。
+
+#### サニタイズの深度制限
+
+入力パラメータの JSON は深度4、配列要素数8、オブジェクトキー数20に制限される。これにより、大きなファイル内容がツール入力に含まれていても、メトリクスファイルの膨張を防ぐ。閾値を超えた部分は `[Truncated]` に置換される。
+
+#### 非ブロッキング設計
+
+Hook 内のすべてのエラーは catch で握りつぶされ、ツール実行をブロックしない。`run()` 関数は `module.exports` で公開されており、`run-with-flags.js` の in-process 実行に対応する。
 
 ### 3.3 コストトラッカー
 
