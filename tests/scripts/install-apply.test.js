@@ -350,7 +350,7 @@ function runTests() {
     }
   })) passed++; else failed++;
 
-  if (test('resolves CLAUDE_PLUGIN_ROOT placeholders in installed claude hooks', () => {
+  if (test('installs claude hooks with the safe plugin bootstrap contract', () => {
     const homeDir = createTempDir('install-apply-home-');
     const projectDir = createTempDir('install-apply-project-');
 
@@ -361,18 +361,28 @@ function runTests() {
       const claudeRoot = path.join(homeDir, '.claude');
       const installedHooks = readJson(path.join(claudeRoot, 'hooks', 'hooks.json'));
 
-      const normSep = (s) => s.replace(/\\/g, '/');
-      const expectedFragment = normSep(path.join(claudeRoot, 'scripts', 'hooks', 'auto-tmux-dev.js'));
-
-      const installedAutoTmuxEntry = installedHooks.hooks.PreToolUse.find(entry => entry.id === 'pre:bash:auto-tmux-dev');
-      assert.ok(installedAutoTmuxEntry, 'hooks/hooks.json should include the auto tmux hook');
+      const installedBashDispatcherEntry = installedHooks.hooks.PreToolUse.find(entry => entry.id === 'pre:bash:dispatcher');
+      assert.ok(installedBashDispatcherEntry, 'hooks/hooks.json should include the consolidated Bash dispatcher hook');
+      assert.ok(Array.isArray(installedBashDispatcherEntry.hooks[0].command), 'hooks/hooks.json should install argv-form commands for cross-platform safety');
       assert.ok(
-        normSep(installedAutoTmuxEntry.hooks[0].command).includes(expectedFragment),
-        'hooks/hooks.json should use the installed Claude root for hook commands'
+        installedBashDispatcherEntry.hooks[0].command[0] === 'node' && installedBashDispatcherEntry.hooks[0].command[1] === '-e',
+        'hooks/hooks.json should use the inline node bootstrap contract'
       );
       assert.ok(
-        !installedAutoTmuxEntry.hooks[0].command.includes('${CLAUDE_PLUGIN_ROOT}'),
-        'hooks/hooks.json should not retain CLAUDE_PLUGIN_ROOT placeholders after install'
+        installedBashDispatcherEntry.hooks[0].command.some(part => String(part).includes('plugin-hook-bootstrap.js')),
+        'hooks/hooks.json should route plugin-managed hooks through the shared bootstrap'
+      );
+      assert.ok(
+        installedBashDispatcherEntry.hooks[0].command.some(part => String(part).includes('CLAUDE_PLUGIN_ROOT')),
+        'hooks/hooks.json should still consult CLAUDE_PLUGIN_ROOT for runtime resolution'
+      );
+      assert.ok(
+        installedBashDispatcherEntry.hooks[0].command.some(part => String(part).includes('pre-bash-dispatcher.js')),
+        'hooks/hooks.json should point the Bash preflight contract at the consolidated dispatcher'
+      );
+      assert.ok(
+        !installedBashDispatcherEntry.hooks[0].command.some(part => String(part).includes('${CLAUDE_PLUGIN_ROOT}')),
+        'hooks/hooks.json should not retain raw CLAUDE_PLUGIN_ROOT shell placeholders after install'
       );
     } finally {
       cleanup(homeDir);
