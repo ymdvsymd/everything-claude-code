@@ -8,6 +8,7 @@ const path = require('path');
 const { spawnSync } = require('child_process');
 
 const runner = path.join(__dirname, '..', '..', 'scripts', 'hooks', 'run-with-flags.js');
+const hookScript = path.join(__dirname, '..', '..', 'scripts', 'hooks', 'gateguard-fact-force.js');
 const externalStateDir = process.env.GATEGUARD_STATE_DIR;
 const tmpRoot = process.env.TMPDIR || process.env.TEMP || process.env.TMP || '/tmp';
 const baseStateDir = externalStateDir || tmpRoot;
@@ -120,6 +121,16 @@ function parseOutput(stdout) {
   }
 }
 
+function loadDirectHook(env = {}) {
+  delete require.cache[require.resolve(hookScript)];
+  Object.assign(process.env, {
+    GATEGUARD_STATE_DIR: stateDir,
+    CLAUDE_SESSION_ID: TEST_SESSION_ID,
+    ...env
+  });
+  return require(hookScript);
+}
+
 function runTests() {
   console.log('\n=== Testing gateguard-fact-force ===\n');
 
@@ -180,6 +191,30 @@ function runTests() {
     assert.ok(output.hookSpecificOutput.permissionDecisionReason.includes('call this new file'));
   })) passed++; else failed++;
 
+  // --- Test 3b: fails open when retry state cannot be persisted ---
+  clearState();
+  if (test('fails open with warning when state path cannot be persisted', () => {
+    const invalidStateDir = path.join(stateDir, 'not-a-directory');
+    fs.writeFileSync(invalidStateDir, 'not a directory', 'utf8');
+
+    const input = {
+      tool_name: 'Write',
+      tool_input: { file_path: '/src/state-failure.js', content: 'module.exports = {};' }
+    };
+    const result = runHook(input, { GATEGUARD_STATE_DIR: invalidStateDir });
+    assert.strictEqual(result.code, 0, 'exit code should be 0');
+    const output = parseOutput(result.stdout);
+    assert.ok(output, 'should produce valid JSON output');
+    if (output.hookSpecificOutput) {
+      assert.notStrictEqual(output.hookSpecificOutput.permissionDecision, 'deny',
+        'unpersistable state must not deny a retry that can never be recorded');
+    } else {
+      assert.strictEqual(output.tool_name, 'Write', 'pass-through should preserve input');
+    }
+    assert.ok(result.stderr.includes('GateGuard state could not be persisted'),
+      'should warn that state persistence failed');
+  })) passed++; else failed++;
+
   // --- Test 4: denies destructive Bash, allows retry ---
   clearState();
   if (test('denies destructive Bash commands, allows retry after facts presented', () => {
@@ -211,6 +246,62 @@ function runTests() {
   })) passed++; else failed++;
 
   // --- Test 5: denies first routine Bash, allows second ---
+  clearState();
+  if (test('allows safe git push --force-with-lease without destructive gate', () => {
+    writeState({
+      checked: ['__bash_session__'],
+      last_active: Date.now()
+    });
+
+    const input = {
+      tool_name: 'Bash',
+      tool_input: { command: 'git push --force-with-lease origin feature-branch' }
+    };
+    const result = runBashHook(input);
+    assert.strictEqual(result.code, 0, 'exit code should be 0');
+    const output = parseOutput(result.stdout);
+    assert.ok(output, 'should produce valid JSON output');
+    if (output.hookSpecificOutput) {
+      assert.notStrictEqual(output.hookSpecificOutput.permissionDecision, 'deny',
+        'safe lease-protected force push should not be denied');
+    } else {
+      assert.strictEqual(output.tool_name, 'Bash', 'pass-through should preserve input');
+    }
+  })) passed++; else failed++;
+
+  // --- Test 6: gates amend as destructive Bash ---
+  clearState();
+  if (test('denies git commit --amend as destructive Bash', () => {
+    const input = {
+      tool_name: 'Bash',
+      tool_input: { command: 'git commit --amend --no-edit' }
+    };
+    const result = runBashHook(input);
+    assert.strictEqual(result.code, 0, 'exit code should be 0');
+    const output = parseOutput(result.stdout);
+    assert.ok(output, 'should produce JSON output');
+    assert.strictEqual(output.hookSpecificOutput.permissionDecision, 'deny');
+    assert.ok(output.hookSpecificOutput.permissionDecisionReason.includes('Destructive'));
+    assert.ok(output.hookSpecificOutput.permissionDecisionReason.includes('rollback'));
+  })) passed++; else failed++;
+
+  // --- Test 7: still gates plain force push as destructive Bash ---
+  clearState();
+  if (test('denies plain git push --force as destructive Bash', () => {
+    const input = {
+      tool_name: 'Bash',
+      tool_input: { command: 'git push --force origin feature-branch' }
+    };
+    const result = runBashHook(input);
+    assert.strictEqual(result.code, 0, 'exit code should be 0');
+    const output = parseOutput(result.stdout);
+    assert.ok(output, 'should produce JSON output');
+    assert.strictEqual(output.hookSpecificOutput.permissionDecision, 'deny');
+    assert.ok(output.hookSpecificOutput.permissionDecisionReason.includes('Destructive'));
+    assert.ok(output.hookSpecificOutput.permissionDecisionReason.includes('rollback'));
+  })) passed++; else failed++;
+
+  // --- Test 8: denies first routine Bash, allows second ---
   clearState();
   if (test('denies first routine Bash, allows second', () => {
     const input = {
@@ -317,7 +408,104 @@ function runTests() {
     }
   })) passed++; else failed++;
 
-  // --- Test 10: MultiEdit gates first unchecked file ---
+  // --- Test 10: respects direct GateGuard env disable for recovery sessions ---
+  clearState();
+  if (test('respects ECC_GATEGUARD=off without writing gate state', () => {
+    const input = {
+      tool_name: 'Write',
+      tool_input: { file_path: '/src/env-disabled.js', content: 'export const ok = true;' }
+    };
+    const result = runHook(input, { ECC_GATEGUARD: 'off' });
+    const output = parseOutput(result.stdout);
+
+    assert.ok(output, 'should produce valid JSON output');
+    assert.strictEqual(output.tool_name, 'Write', 'disabled gate should pass through raw input');
+    assert.ok(!output.hookSpecificOutput, 'disabled gate should not deny the operation');
+    assert.ok(!fs.existsSync(stateFile), 'disabled gate should not create or mutate gate state');
+  })) passed++; else failed++;
+
+  // --- Test 11: respects legacy GATEGUARD_DISABLED env disable ---
+  clearState();
+  if (test('respects GATEGUARD_DISABLED=1 for Bash recovery', () => {
+    const input = {
+      tool_name: 'Bash',
+      tool_input: { command: 'npm test' }
+    };
+    const result = runBashHook(input, { GATEGUARD_DISABLED: '1' });
+    const output = parseOutput(result.stdout);
+
+    assert.ok(output, 'should produce valid JSON output');
+    assert.strictEqual(output.tool_name, 'Bash', 'disabled gate should pass Bash through raw input');
+    assert.ok(!output.hookSpecificOutput, 'disabled gate should not deny Bash');
+    assert.ok(!fs.existsSync(stateFile), 'disabled gate should not create or mutate gate state');
+  })) passed++; else failed++;
+
+  // --- Test 12: legacy GATEGUARD_DISABLED compatibility is scoped to =1 ---
+  clearState();
+  if (test('does not treat GATEGUARD_DISABLED=true as a disable flag', () => {
+    const input = {
+      tool_name: 'Bash',
+      tool_input: { command: 'npm test' }
+    };
+    const result = runBashHook(input, { GATEGUARD_DISABLED: 'true' });
+    const output = parseOutput(result.stdout);
+
+    assert.strictEqual(output.hookSpecificOutput.permissionDecision, 'deny');
+    assert.ok(output.hookSpecificOutput.permissionDecisionReason.includes('current user request'));
+  })) passed++; else failed++;
+
+  // --- Test 13: denial messages show an escape hatch ---
+  clearState();
+  if (test('denial messages include direct recovery escape hatch', () => {
+    const input = {
+      tool_name: 'Write',
+      tool_input: { file_path: '/src/recovery-hint.js', content: 'export const ok = true;' }
+    };
+    const result = runHook(input);
+    const output = parseOutput(result.stdout);
+
+    assert.strictEqual(output.hookSpecificOutput.permissionDecision, 'deny');
+    assert.ok(output.hookSpecificOutput.permissionDecisionReason.includes('ECC_GATEGUARD=off'),
+      'denial reason should show the direct recovery env toggle');
+    assert.ok(output.hookSpecificOutput.permissionDecisionReason.includes('ECC_DISABLED_HOOKS'),
+      'denial reason should mention the existing hook-id disable control');
+  })) passed++; else failed++;
+
+  // --- Test 14: routine Bash denial messages show the Bash hook escape hatch ---
+  clearState();
+  if (test('routine Bash denials include Bash hook disable id', () => {
+    const input = {
+      tool_name: 'Bash',
+      tool_input: { command: 'npm test' }
+    };
+    const result = runBashHook(input);
+    const output = parseOutput(result.stdout);
+    const reason = output.hookSpecificOutput.permissionDecisionReason;
+
+    assert.strictEqual(output.hookSpecificOutput.permissionDecision, 'deny');
+    assert.ok(reason.includes('pre:bash:gateguard-fact-force'),
+      'routine Bash denial should show the Bash hook ID');
+    assert.ok(!reason.includes('pre:edit-write:gateguard-fact-force'),
+      'routine Bash denial should not show the Edit/Write hook ID as the targeted disable');
+  })) passed++; else failed++;
+
+  // --- Test 15: destructive Bash denials do not advertise the recovery escape hatch ---
+  clearState();
+  if (test('destructive Bash denials omit recovery escape hatch', () => {
+    const input = {
+      tool_name: 'Bash',
+      tool_input: { command: 'rm -rf /tmp/demo' }
+    };
+    const result = runBashHook(input);
+    const output = parseOutput(result.stdout);
+
+    assert.strictEqual(output.hookSpecificOutput.permissionDecision, 'deny');
+    assert.ok(output.hookSpecificOutput.permissionDecisionReason.includes('Destructive command detected'));
+    assert.ok(!output.hookSpecificOutput.permissionDecisionReason.includes('ECC_GATEGUARD=off'),
+      'destructive gate should not advertise disabling GateGuard');
+  })) passed++; else failed++;
+
+  // --- Test 16: MultiEdit gates first unchecked file ---
   clearState();
   if (test('denies first MultiEdit with unchecked file', () => {
     const input = {
@@ -560,6 +748,399 @@ function runTests() {
     } else {
       assert.strictEqual(secondOutput.tool_name, 'Bash');
     }
+  })) passed++; else failed++;
+
+  // --- Test 20: malformed JSON passes through unchanged ---
+  clearState();
+  if (test('passes malformed JSON input through unchanged', () => {
+    const rawInput = '{ not valid json';
+    const result = runHook(rawInput);
+
+    assert.strictEqual(result.code, 0, 'exit code should be 0');
+    assert.strictEqual(result.stdout, rawInput, 'malformed JSON should pass through unchanged');
+  })) passed++; else failed++;
+
+  // --- Test 21: read-only git allowlist covers supported subcommands ---
+  clearState();
+  if (test('allows read-only git introspection subcommands without first-bash gating', () => {
+    const commands = [
+      'git status --porcelain --branch',
+      'git diff',
+      'git diff --name-only',
+      'git log --oneline --max-count=1',
+      'git show HEAD:README.md',
+      'git branch --show-current',
+      'git rev-parse --abbrev-ref HEAD',
+    ];
+
+    for (const command of commands) {
+      const result = runBashHook({
+        tool_name: 'Bash',
+        tool_input: { command }
+      });
+      const output = parseOutput(result.stdout);
+      assert.ok(output, `should produce JSON output for ${command}`);
+      if (output.hookSpecificOutput) {
+        assert.notStrictEqual(output.hookSpecificOutput.permissionDecision, 'deny',
+          `${command} should not be denied`);
+      } else {
+        assert.strictEqual(output.tool_name, 'Bash', `${command} should pass through`);
+      }
+    }
+  })) passed++; else failed++;
+
+  // --- Test 22: unsupported git commands still flow through routine Bash gate ---
+  clearState();
+  if (test('gates non-allowlisted git commands as routine Bash', () => {
+    const result = runBashHook({
+      tool_name: 'Bash',
+      tool_input: { command: 'git remote -v' }
+    });
+    const output = parseOutput(result.stdout);
+    assert.ok(output, 'should produce JSON output');
+    assert.strictEqual(output.hookSpecificOutput.permissionDecision, 'deny');
+    assert.ok(output.hookSpecificOutput.permissionDecisionReason.includes('current user request'));
+  })) passed++; else failed++;
+
+  // --- Test 23: module-load pruning removes old state files only ---
+  clearState();
+  if (test('prunes stale state files while keeping fresh state files', () => {
+    const staleFile = path.join(stateDir, 'state-stale-session.json');
+    const freshFile = path.join(stateDir, 'state-fresh-session.json');
+    fs.writeFileSync(staleFile, JSON.stringify({ checked: [], last_active: Date.now() }), 'utf8');
+    fs.writeFileSync(freshFile, JSON.stringify({ checked: [], last_active: Date.now() }), 'utf8');
+
+    const staleTime = new Date(Date.now() - (61 * 60 * 1000));
+    fs.utimesSync(staleFile, staleTime, staleTime);
+
+    const result = runHook({
+      tool_name: 'Read',
+      tool_input: { file_path: '/src/app.js' }
+    });
+    const output = parseOutput(result.stdout);
+    assert.ok(output, 'should produce valid JSON output');
+
+    assert.ok(!fs.existsSync(staleFile), 'stale state file should be pruned at module load');
+    assert.ok(fs.existsSync(freshFile), 'fresh state file should not be pruned');
+  })) passed++; else failed++;
+
+  // --- Test 24: transcript path fallback provides a stable session key ---
+  clearState();
+  if (test('uses transcript_path fallback when session ids are absent', () => {
+    const input = {
+      transcript_path: path.join(stateDir, 'session.jsonl'),
+      tool_name: 'Bash',
+      tool_input: { command: 'pwd' }
+    };
+
+    const first = runBashHook(input, {
+      CLAUDE_SESSION_ID: '',
+      ECC_SESSION_ID: '',
+      CLAUDE_TRANSCRIPT_PATH: '',
+    });
+    const firstOutput = parseOutput(first.stdout);
+    assert.strictEqual(firstOutput.hookSpecificOutput.permissionDecision, 'deny');
+
+    const stateFiles = fs.readdirSync(stateDir).filter(entry => entry.startsWith('state-') && entry.endsWith('.json'));
+    assert.strictEqual(stateFiles.length, 1, 'transcript path should produce one state file');
+    assert.ok(/state-tx-[a-f0-9]{24}\.json$/.test(stateFiles[0]), 'transcript path should hash to a tx-* key');
+
+    const second = runBashHook(input, {
+      CLAUDE_SESSION_ID: '',
+      ECC_SESSION_ID: '',
+      CLAUDE_TRANSCRIPT_PATH: '',
+    });
+    const secondOutput = parseOutput(second.stdout);
+    if (secondOutput.hookSpecificOutput) {
+      assert.notStrictEqual(secondOutput.hookSpecificOutput.permissionDecision, 'deny',
+        'retry should be allowed when transcript_path is stable');
+    } else {
+      assert.strictEqual(secondOutput.tool_name, 'Bash');
+    }
+  })) passed++; else failed++;
+
+  // --- Test 25: project directory fallback provides a stable session key ---
+  clearState();
+  if (test('uses project directory fallback when no session or transcript id exists', () => {
+    const input = {
+      tool_name: 'Bash',
+      tool_input: { command: 'pwd' }
+    };
+    const fallbackEnv = {
+      CLAUDE_SESSION_ID: '',
+      ECC_SESSION_ID: '',
+      CLAUDE_TRANSCRIPT_PATH: '',
+      CLAUDE_PROJECT_DIR: path.join(stateDir, 'project-root'),
+    };
+
+    const first = runBashHook(input, fallbackEnv);
+    const firstOutput = parseOutput(first.stdout);
+    assert.strictEqual(firstOutput.hookSpecificOutput.permissionDecision, 'deny');
+
+    const stateFiles = fs.readdirSync(stateDir).filter(entry => entry.startsWith('state-') && entry.endsWith('.json'));
+    assert.strictEqual(stateFiles.length, 1, 'project fallback should produce one state file');
+    assert.ok(/state-proj-[a-f0-9]{24}\.json$/.test(stateFiles[0]), 'project fallback should hash to a proj-* key');
+
+    const second = runBashHook(input, fallbackEnv);
+    const secondOutput = parseOutput(second.stdout);
+    if (secondOutput.hookSpecificOutput) {
+      assert.notStrictEqual(secondOutput.hookSpecificOutput.permissionDecision, 'deny',
+        'retry should be allowed when project fallback is stable');
+    } else {
+      assert.strictEqual(secondOutput.tool_name, 'Bash');
+    }
+  })) passed++; else failed++;
+
+  // --- Test 26: direct run() accepts object input and default fields ---
+  clearState();
+  if (test('direct run handles object input and missing optional fields', () => {
+    const hook = loadDirectHook();
+
+    const readInput = { tool_name: 'Read', tool_input: { file_path: '/src/app.js' } };
+    assert.strictEqual(hook.run(readInput), readInput, 'object input should pass through unchanged');
+
+    const editWithoutInput = { tool_name: 'Edit' };
+    assert.strictEqual(hook.run(editWithoutInput), editWithoutInput, 'missing tool_input should allow Edit');
+
+    const multiWithoutEdits = { tool_name: 'MultiEdit', tool_input: {} };
+    assert.strictEqual(hook.run(multiWithoutEdits), multiWithoutEdits, 'missing edits array should allow MultiEdit');
+
+    const bashWithoutCommand = { tool_name: 'Bash', tool_input: {} };
+    const bashResult = hook.run(bashWithoutCommand);
+    const bashOutput = JSON.parse(bashResult.stdout);
+    assert.strictEqual(bashOutput.hookSpecificOutput.permissionDecision, 'deny',
+      'missing Bash command should still use routine Bash gate');
+  })) passed++; else failed++;
+
+  // --- Test 27: bidi controls are stripped from file paths ---
+  clearState();
+  if (test('sanitizes bidi override characters in gated file paths', () => {
+    const bidiOverride = String.fromCharCode(0x202e);
+    const input = {
+      tool_name: 'Edit',
+      tool_input: { file_path: `/src/${bidiOverride}evil.js`, old_string: 'a', new_string: 'b' }
+    };
+
+    const result = runHook(input);
+    const output = parseOutput(result.stdout);
+    assert.ok(output, 'should produce JSON output');
+    const reason = output.hookSpecificOutput.permissionDecisionReason;
+    assert.ok(!reason.includes(bidiOverride), 'bidi override must not appear in denial reason');
+    assert.ok(reason.includes('evil.js'), 'sanitized path should retain visible filename text');
+  })) passed++; else failed++;
+
+  // --- Test 28: saveState preserves concurrent disk updates ---
+  clearState();
+  if (test('merges state written by another process during save', () => {
+    const hook = loadDirectHook();
+    const originalMkdirSync = fs.mkdirSync;
+    let injected = false;
+
+    fs.mkdirSync = function patchedMkdirSync(target) {
+      const result = originalMkdirSync.apply(fs, arguments);
+      if (!injected && path.resolve(String(target)) === path.resolve(stateDir)) {
+        injected = true;
+        fs.writeFileSync(stateFile, JSON.stringify({
+          checked: ['/src/concurrent.js'],
+          last_active: Date.now()
+        }), 'utf8');
+      }
+      return result;
+    };
+
+    try {
+      const result = hook.run({
+        tool_name: 'Edit',
+        tool_input: { file_path: '/src/new-edit.js', old_string: 'a', new_string: 'b' }
+      });
+      const output = parseOutput(result.stdout);
+      assert.strictEqual(output.hookSpecificOutput.permissionDecision, 'deny', 'first edit should still be gated');
+    } finally {
+      fs.mkdirSync = originalMkdirSync;
+    }
+
+    const persisted = JSON.parse(fs.readFileSync(stateFile, 'utf8'));
+    assert.ok(persisted.checked.includes('/src/concurrent.js'), 'concurrent disk entry should be preserved');
+    assert.ok(persisted.checked.includes('/src/new-edit.js'), 'new in-memory entry should be persisted');
+  })) passed++; else failed++;
+
+  // --- Test 29: stale temp files from interrupted writes are pruned ---
+  clearState();
+  if (test('prunes stale state temp files at module load', () => {
+    fs.mkdirSync(stateDir, { recursive: true });
+    const staleTmp = path.join(stateDir, `${path.basename(stateFile)}.tmp.1234.abcd`);
+    const freshState = path.join(stateDir, 'state-fresh-session.json');
+    fs.writeFileSync(staleTmp, '{}', 'utf8');
+    fs.writeFileSync(freshState, '{}', 'utf8');
+    const staleTime = new Date(Date.now() - (61 * 60 * 1000));
+    fs.utimesSync(staleTmp, staleTime, staleTime);
+
+    loadDirectHook();
+
+    assert.ok(!fs.existsSync(staleTmp), 'stale temp state file should be pruned');
+    assert.ok(fs.existsSync(freshState), 'fresh state file should remain');
+  })) passed++; else failed++;
+
+  function runFreshSessionEdit(filePath, extra = {}) {
+    return runHook({
+      tool_name: 'Edit',
+      tool_input: { file_path: filePath, old_string: 'a', new_string: 'b' },
+      session_id: 'subagent-fresh-session',
+      ...extra
+    }, { CLAUDE_SESSION_ID: '', ECC_SESSION_ID: '' });
+  }
+
+  function runFreshSessionBash(command, extra = {}) {
+    return runBashHook({
+      tool_name: 'Bash',
+      tool_input: { command },
+      session_id: 'subagent-fresh-session',
+      ...extra
+    }, { CLAUDE_SESSION_ID: '', ECC_SESSION_ID: '' });
+  }
+
+  // --- Test 30: top-level Edit denies; subagent Edit allows ---
+  clearState();
+  if (test('A/B: same Edit denies at top level and allows with agent_id', () => {
+    const topLevel = runFreshSessionEdit('/src/subagent-edit.js');
+    const topOut = parseOutput(topLevel.stdout);
+    assert.ok(topOut, 'top-level edit should produce JSON output');
+    assert.strictEqual(topOut.hookSpecificOutput.permissionDecision, 'deny');
+
+    clearState();
+    const subagent = runFreshSessionEdit('/src/subagent-edit.js', { agent_id: 'agent-abc-123' });
+    const subOut = parseOutput(subagent.stdout);
+    assert.ok(subOut, 'subagent edit should produce JSON output');
+    assert.ok(!subOut.hookSpecificOutput || subOut.hookSpecificOutput.permissionDecision !== 'deny',
+      'subagent edit should bypass the first-touch file gate');
+  })) passed++; else failed++;
+
+  // --- Test 31: top-level Write denies; subagent Write allows ---
+  clearState();
+  if (test('A/B: same Write denies at top level and allows with agent_id', () => {
+    const topLevel = runHook({
+      tool_name: 'Write',
+      tool_input: { file_path: '/src/subagent-write.js', content: 'module.exports = {};' },
+      session_id: 'subagent-fresh-session'
+    }, { CLAUDE_SESSION_ID: '', ECC_SESSION_ID: '' });
+    const topOut = parseOutput(topLevel.stdout);
+    assert.ok(topOut, 'top-level write should produce JSON output');
+    assert.strictEqual(topOut.hookSpecificOutput.permissionDecision, 'deny');
+
+    clearState();
+    const subagent = runHook({
+      tool_name: 'Write',
+      tool_input: { file_path: '/src/subagent-write.js', content: 'module.exports = {};' },
+      session_id: 'subagent-fresh-session',
+      agent_id: 'agent-abc-123'
+    }, { CLAUDE_SESSION_ID: '', ECC_SESSION_ID: '' });
+    const subOut = parseOutput(subagent.stdout);
+    assert.ok(subOut, 'subagent write should produce JSON output');
+    assert.ok(!subOut.hookSpecificOutput || subOut.hookSpecificOutput.permissionDecision !== 'deny',
+      'subagent write should bypass the first-touch file gate');
+  })) passed++; else failed++;
+
+  // --- Test 32: top-level MultiEdit denies; subagent MultiEdit allows ---
+  clearState();
+  if (test('A/B: same MultiEdit denies at top level and allows with agent_id', () => {
+    const edits = [
+      { file_path: '/src/subagent-multi-a.js', old_string: 'a', new_string: 'b' },
+      { file_path: '/src/subagent-multi-b.js', old_string: 'c', new_string: 'd' }
+    ];
+
+    const topLevel = runHook({
+      tool_name: 'MultiEdit',
+      tool_input: { edits },
+      session_id: 'subagent-fresh-session'
+    }, { CLAUDE_SESSION_ID: '', ECC_SESSION_ID: '' });
+    const topOut = parseOutput(topLevel.stdout);
+    assert.ok(topOut, 'top-level MultiEdit should produce JSON output');
+    assert.strictEqual(topOut.hookSpecificOutput.permissionDecision, 'deny');
+
+    clearState();
+    const subagent = runHook({
+      tool_name: 'MultiEdit',
+      tool_input: { edits },
+      session_id: 'subagent-fresh-session',
+      agent_id: 'agent-abc-123'
+    }, { CLAUDE_SESSION_ID: '', ECC_SESSION_ID: '' });
+    const subOut = parseOutput(subagent.stdout);
+    assert.ok(subOut, 'subagent MultiEdit should produce JSON output');
+    assert.ok(!subOut.hookSpecificOutput || subOut.hookSpecificOutput.permissionDecision !== 'deny',
+      'subagent MultiEdit should bypass the first-touch file gate');
+  })) passed++; else failed++;
+
+  // --- Test 33: Bash stays gated inside subagents ---
+  clearState();
+  if (test('routine Bash remains gated in subagent context', () => {
+    const result = runFreshSessionBash('pwd', { agent_id: 'agent-abc-123' });
+    const output = parseOutput(result.stdout);
+    assert.ok(output, 'subagent Bash should produce JSON output');
+    assert.strictEqual(output.hookSpecificOutput.permissionDecision, 'deny');
+    assert.ok(output.hookSpecificOutput.permissionDecisionReason.includes('current user request'));
+  })) passed++; else failed++;
+
+  // --- Test 34: destructive Bash stays gated inside subagents ---
+  clearState();
+  if (test('destructive Bash remains gated in subagent context', () => {
+    const result = runFreshSessionBash('rm -rf /tmp/demo-path', { agent_id: 'agent-abc-123' });
+    const output = parseOutput(result.stdout);
+    assert.ok(output, 'subagent destructive Bash should produce JSON output');
+    assert.strictEqual(output.hookSpecificOutput.permissionDecision, 'deny');
+    assert.ok(output.hookSpecificOutput.permissionDecisionReason.includes('Destructive command detected'));
+  })) passed++; else failed++;
+
+  // --- Test 35: parent tool IDs also mark subagent context ---
+  clearState();
+  if (test('parent_tool_use_id and parentToolUseId mark subagent file edits', () => {
+    const snake = runFreshSessionEdit('/src/subagent-parent-snake.js', { parent_tool_use_id: 'toolu_parent_01' });
+    const snakeOut = parseOutput(snake.stdout);
+    assert.ok(snakeOut, 'snake-case parent marker should produce JSON output');
+    assert.ok(!snakeOut.hookSpecificOutput || snakeOut.hookSpecificOutput.permissionDecision !== 'deny',
+      'parent_tool_use_id should bypass the first-touch file gate');
+
+    clearState();
+    const camel = runFreshSessionEdit('/src/subagent-parent-camel.js', { parentToolUseId: 'toolu_parent_02' });
+    const camelOut = parseOutput(camel.stdout);
+    assert.ok(camelOut, 'camel-case parent marker should produce JSON output');
+    assert.ok(!camelOut.hookSpecificOutput || camelOut.hookSpecificOutput.permissionDecision !== 'deny',
+      'parentToolUseId should bypass the first-touch file gate');
+  })) passed++; else failed++;
+
+  // --- Test 36: only non-empty string markers count ---
+  clearState();
+  if (test('empty and non-string subagent markers do not bypass file gates', () => {
+    const cases = [
+      ['empty', { agent_id: '' }],
+      ['whitespace', { agent_id: '   ' }],
+      ['numeric', { agent_id: 12345 }],
+      ['null', { agent_id: null }]
+    ];
+
+    for (const [name, extra] of cases) {
+      clearState();
+      const result = runFreshSessionEdit(`/src/subagent-marker-${name}.js`, extra);
+      const output = parseOutput(result.stdout);
+      assert.ok(output, `${name} marker should produce JSON output`);
+      assert.strictEqual(output.hookSpecificOutput.permissionDecision, 'deny',
+        `${name} marker should not bypass the first-touch file gate`);
+    }
+  })) passed++; else failed++;
+
+  // --- Test 37: two sequential subagent Edits on different files pass ---
+  clearState();
+  if (test('two sequential subagent Edits on different files both pass', () => {
+    const first = runFreshSessionEdit('/src/subagent-seq-a.js', { agent_id: 'agent-seq' });
+    const firstOut = parseOutput(first.stdout);
+    assert.ok(firstOut, 'first subagent edit should produce JSON output');
+    assert.ok(!firstOut.hookSpecificOutput || firstOut.hookSpecificOutput.permissionDecision !== 'deny',
+      'first subagent edit should pass');
+
+    const second = runFreshSessionEdit('/src/subagent-seq-b.js', { agent_id: 'agent-seq' });
+    const secondOut = parseOutput(second.stdout);
+    assert.ok(secondOut, 'second subagent edit should produce JSON output');
+    assert.ok(!secondOut.hookSpecificOutput || secondOut.hookSpecificOutput.permissionDecision !== 'deny',
+      'second subagent edit should pass even on a new file');
   })) passed++; else failed++;
 
   // Cleanup only the temp directory created by this test file.

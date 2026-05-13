@@ -1,4 +1,4 @@
-**언어:** [English](../../README.md) | [Português (Brasil)](../pt-BR/README.md) | [简体中文](../../README.zh-CN.md) | [繁體中文](../zh-TW/README.md) | [日本語](../ja-JP/README.md) | 한국어 | [Türkçe](../tr/README.md)
+**언어:** [English](../../README.md) | [Português (Brasil)](../pt-BR/README.md) | [简体中文](../../README.zh-CN.md) | [繁體中文](../zh-TW/README.md) | [日本語](../ja-JP/README.md) | 한국어 | [Türkçe](../tr/README.md) | [Русский](../ru/README.md) | [Tiếng Việt](../vi-VN/README.md)
 
 # Everything Claude Code
 
@@ -22,9 +22,9 @@
 
 <div align="center">
 
-**Language / 语言 / 語言 / 언어 / Dil**
+**Language / 语言 / 語言 / 언어 / Dil / Язык / Ngôn ngữ**
 
-[**English**](../../README.md) | [Português (Brasil)](../pt-BR/README.md) | [简体中文](../../README.zh-CN.md) | [繁體中文](../zh-TW/README.md) | [日本語](../ja-JP/README.md) | [한국어](README.md) | [Türkçe](../tr/README.md)
+[**English**](../../README.md) | [Português (Brasil)](../pt-BR/README.md) | [简体中文](../../README.zh-CN.md) | [繁體中文](../zh-TW/README.md) | [日本語](../ja-JP/README.md) | [한국어](README.md) | [Türkçe](../tr/README.md) | [Русский](../ru/README.md) | [Tiếng Việt](../vi-VN/README.md)
 
 </div>
 
@@ -115,7 +115,7 @@
 /plugin marketplace add https://github.com/affaan-m/everything-claude-code
 
 # 플러그인 설치
-/plugin install everything-claude-code
+/plugin install ecc@ecc
 ```
 
 ### 2단계: 룰 설치 (필수)
@@ -147,7 +147,7 @@ cd everything-claude-code
 # /plan "사용자 인증 추가"
 
 # 사용 가능한 커맨드 확인
-/plugin list everything-claude-code@everything-claude-code
+/plugin list ecc@ecc
 ```
 
 **끝!** 이제 16개 에이전트, 65개 스킬, 40개 커맨드를 사용할 수 있습니다.
@@ -359,7 +359,7 @@ Claude Code v2.1+는 설치된 플러그인의 `hooks/hooks.json`을 **자동으
 /plugin marketplace add https://github.com/affaan-m/everything-claude-code
 
 # 플러그인 설치
-/plugin install everything-claude-code
+/plugin install ecc@ecc
 ```
 
 또는 `~/.claude/settings.json`에 직접 추가:
@@ -375,7 +375,7 @@ Claude Code v2.1+는 설치된 플러그인의 `hooks/hooks.json`을 **자동으
     }
   },
   "enabledPlugins": {
-    "everything-claude-code@everything-claude-code": true
+    "ecc@ecc": true
   }
 }
 ```
@@ -535,7 +535,7 @@ rules/
 <summary><b>설치된 에이전트/커맨드 확인은 어떻게 하나요?</b></summary>
 
 ```bash
-/plugin list everything-claude-code@everything-claude-code
+/plugin list ecc@ecc
 ```
 
 플러그인에서 사용할 수 있는 모든 에이전트, 커맨드, 스킬을 보여줍니다.

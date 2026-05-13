@@ -21,9 +21,9 @@
 
 <div align="center">
 
-**Language / 语言 / 語言 / Dil**
+**Language / 语言 / 語言 / Dil / Язык / Ngôn ngữ**
 
-[**English**](README.md) | [Português (Brasil)](docs/pt-BR/README.md) | [简体中文](README.zh-CN.md) | [繁體中文](docs/zh-TW/README.md) | [日本語](docs/ja-JP/README.md) | [한국어](docs/ko-KR/README.md) | [Türkçe](docs/tr/README.md)
+[**English**](README.md) | [Português (Brasil)](docs/pt-BR/README.md) | [简体中文](README.zh-CN.md) | [繁體中文](docs/zh-TW/README.md) | [日本語](docs/ja-JP/README.md) | [한국어](docs/ko-KR/README.md) | [Türkçe](docs/tr/README.md) | [Русский](docs/ru/README.md) | [Tiếng Việt](docs/vi-VN/README.md)
 
 </div>
 
@@ -80,7 +80,7 @@
 
 ## 最新动态
 
-### v1.10.0 — 表面同步、运营工作流与 ECC 2.0 Alpha（2026年4月）
+### v2.0.0-rc.1 — 表面同步、运营工作流与 ECC 2.0 Alpha（2026年4月）
 
 - **公共表面已与真实仓库同步** —— 元数据、目录数量、插件清单以及安装文档现在都与实际开源表面保持一致。
 - **运营与外向型工作流扩展** —— `brand-voice`、`social-graph-ranker`、`customer-billing-ops`、`google-workspace-ops` 等运营型 skill 已纳入同一系统。
@@ -102,12 +102,12 @@
 /plugin marketplace add https://github.com/affaan-m/everything-claude-code
 
 # 安装插件
-/plugin install everything-claude-code@everything-claude-code
+/plugin install ecc@ecc
 ```
 
-> 安装名称说明：较早的帖子里可能还会出现旧的短别名。那个旧缩写现在已经废弃。Anthropic 的 marketplace/plugin 安装是按规范化插件标识符寻址的，因此 ECC 统一为 `everything-claude-code@everything-claude-code`，这样市场条目、安装命令、`/plugin list` 输出和仓库文档都使用同一个公开名称，不再出现两个名字指向同一插件的混乱。
+> 安装名称说明：较早的帖子里可能还会出现较长的旧标识符。Anthropic 的 marketplace/plugin 安装是按规范化插件标识符寻址的，因此 ECC 现在统一为 `ecc@ecc`，让工具名和 slash command 命名空间保持简短。
 
-### 第二步：安装规则（必需）
+### 第二步：仅在需要时安装规则
 
 > WARNING: **重要提示：** Claude Code 插件无法自动分发 `rules`。
 >
@@ -157,10 +157,10 @@ Copy-Item -Recurse rules/typescript "$HOME/.claude/rules/"
 # /plan "添加用户认证"
 
 # 查看可用命令
-/plugin list everything-claude-code@everything-claude-code
+/plugin list ecc@ecc
 ```
 
-**完成！** 你现在可以使用 48 个代理、183 个技能和 79 个命令。
+**完成！** 你现在可以使用 60 个代理、228 个技能和 75 个命令。
 
 ### multi-* 命令需要额外配置
 
@@ -298,6 +298,10 @@ everything-claude-code/
 |   |-- laravel-verification/       # Laravel 验证循环（新增）
 |   |-- python-patterns/            # Python 惯用写法与最佳实践（新增）
 |   |-- python-testing/             # 基于 pytest 的 Python 测试（新增）
+|   |-- quarkus-patterns/            # Java Quarkus 模式（新增）
+|   |-- quarkus-security/            # Quarkus 安全（新增）
+|   |-- quarkus-tdd/                 # Quarkus TDD（新增）
+|   |-- quarkus-verification/        # Quarkus 验证（新增）
 |   |-- springboot-patterns/        # Java Spring Boot 模式（新增）
 |   |-- springboot-security/        # Spring Boot 安全（新增）
 |   |-- springboot-tdd/             # Spring Boot TDD（新增）
@@ -330,17 +334,15 @@ everything-claude-code/
 |   |-- autonomous-loops/           # 自主循环模式：顺序流水线、PR 循环、DAG 编排（新增）
 |   |-- plankton-code-quality/      # 基于 Plankton 钩子的实时代码质量管控（新增）
 |
-|-- commands/         # 传统斜杠命令兼容层；优先使用 skills/
-|   |-- tdd.md              # /tdd - 测试驱动开发
+|-- commands/         # 维护中的斜杠命令兼容层；优先使用 skills/
 |   |-- plan.md             # /plan - 实现规划
-|   |-- e2e.md              # /e2e - 生成端到端测试
 |   |-- code-review.md      # /code-review - 代码质量审查
 |   |-- build-fix.md        # /build-fix - 修复构建错误
+|   |-- quality-gate.md     # /quality-gate - 验证门禁
 |   |-- refactor-clean.md   # /refactor-clean - 清理无效代码
 |   |-- learn.md            # /learn - 会话中提取模式（长文本指南）
 |   |-- learn-eval.md       # /learn-eval - 提取、评估并保存模式（新增）
 |   |-- checkpoint.md       # /checkpoint - 保存验证状态（长文本指南）
-|   |-- verify.md           # /verify - 运行验证循环（长文本指南）
 |   |-- setup-pm.md         # /setup-pm - 配置包管理器
 |   |-- go-review.md        # /go-review - Go 代码审查（新增）
 |   |-- go-test.md          # /go-test - Go TDD 工作流（新增）
@@ -357,13 +359,17 @@ everything-claude-code/
 |   |-- multi-backend.md    # /multi-backend - 后端多服务编排（新增）
 |   |-- multi-frontend.md   # /multi-frontend - 前端多服务编排（新增）
 |   |-- multi-workflow.md   # /multi-workflow - 通用多服务工作流（新增）
-|   |-- orchestrate.md      # /orchestrate - 多智能体协同调度
 |   |-- sessions.md         # /sessions - 会话历史管理
-|   |-- eval.md             # /eval - 按标准评估
 |   |-- test-coverage.md    # /test-coverage - 测试覆盖率分析
 |   |-- update-docs.md      # /update-docs - 更新文档
 |   |-- update-codemaps.md  # /update-codemaps - 更新代码映射
 |   |-- python-review.md    # /python-review - Python 代码审查（新增）
+|-- legacy-command-shims/   # 已退役短命令的按需归档，例如 /tdd 和 /eval
+|   |-- tdd.md              # /tdd - 优先使用 tdd-workflow 技能
+|   |-- e2e.md              # /e2e - 优先使用 e2e-testing 技能
+|   |-- eval.md             # /eval - 优先使用 eval-harness 技能
+|   |-- verify.md           # /verify - 优先使用 verification-loop 技能
+|   |-- orchestrate.md      # /orchestrate - 优先使用 dmux-workflows 或 multi-workflow
 |
 |-- rules/            # 必须遵守的规范（复制到 ~/.claude/rules/）
 |   |-- README.md            # 结构概览与安装指南
@@ -544,7 +550,7 @@ Claude Code v2.1+ 会**按照约定自动加载**已安装插件中的 `hooks/ho
 /plugin marketplace add https://github.com/affaan-m/everything-claude-code
 
 # 安装插件
-/plugin install everything-claude-code@everything-claude-code
+/plugin install ecc@ecc
 ```
 
 或直接添加到你的 `~/.claude/settings.json`：
@@ -560,7 +566,7 @@ Claude Code v2.1+ 会**按照约定自动加载**已安装插件中的 `hooks/ho
     }
   },
   "enabledPlugins": {
-    "everything-claude-code@everything-claude-code": true
+    "ecc@ecc": true
   }
 }
 ```
@@ -614,13 +620,16 @@ cp -r everything-claude-code/.agents/skills/* ~/.claude/skills/
 cp -r everything-claude-code/skills/search-first ~/.claude/skills/
 
 # 可选：仅在需要时添加细分领域/框架专属技能
-# for s in django-patterns django-tdd laravel-patterns springboot-patterns; do
+# for s in django-patterns django-tdd laravel-patterns springboot-patterns quarkus-patterns; do
 # cp -r everything-claude-code/skills/$s ~/.claude/skills/
 # done
 
-# 可选：迁移期间保留传统斜杠命令兼容
+# 可选：迁移期间保留维护中的斜杠命令兼容
 mkdir -p ~/.claude/commands
 cp everything-claude-code/commands/*.md ~/.claude/commands/
+
+# 已退役短命令位于 legacy-command-shims/commands/。
+# 仅在仍需要 /tdd 等旧名称时，单独复制对应文件。
 ```
 
 #### 将钩子配置添加到 settings.json

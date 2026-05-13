@@ -41,6 +41,10 @@ for (const workflow of [
     assert.match(content, /registry-url:\s*['"]https:\/\/registry\.npmjs\.org['"]/);
   });
 
+  test(`${workflow} ignores dependency lifecycle scripts before privileged publish`, () => {
+    assert.match(content, /npm ci --ignore-scripts/);
+  });
+
   test(`${workflow} checks whether the tagged npm version already exists`, () => {
     assert.match(content, /Check npm publish state/);
     assert.match(content, /npm view "\$\{PACKAGE_NAME\}@\$\{PACKAGE_VERSION\}" version/);
@@ -49,6 +53,18 @@ for (const workflow of [
   test(`${workflow} publishes new tag versions to npm`, () => {
     assert.match(content, /npm publish --access public --provenance/);
     assert.match(content, /NODE_AUTH_TOKEN:\s*\$\{\{\s*secrets\.NPM_TOKEN\s*\}\}/);
+  });
+
+  test(`${workflow} creates the GitHub Release before publishing to npm`, () => {
+    const releaseIndex = content.indexOf('name: Create GitHub Release');
+    const publishIndex = content.indexOf('name: Publish npm package');
+
+    assert.ok(releaseIndex >= 0, `${workflow} should create a GitHub Release`);
+    assert.ok(publishIndex >= 0, `${workflow} should publish the npm package`);
+    assert.ok(
+      releaseIndex < publishIndex,
+      `${workflow} should not publish to npm until GitHub Release creation has succeeded`
+    );
   });
 }
 

@@ -38,10 +38,25 @@ const READ_HEARTBEAT_MS = 60 * 1000;
 const MAX_CHECKED_ENTRIES = 500;
 const MAX_SESSION_KEYS = 50;
 const ROUTINE_BASH_SESSION_KEY = '__bash_session__';
+const EDIT_WRITE_HOOK_ID = 'pre:edit-write:gateguard-fact-force';
+const BASH_HOOK_ID = 'pre:bash:gateguard-fact-force';
+const ECC_DISABLE_VALUES = new Set(['0', 'false', 'off', 'disabled', 'disable']);
 
-const DESTRUCTIVE_BASH = /\b(rm\s+-rf|git\s+reset\s+--hard|git\s+checkout\s+--|git\s+clean\s+-f|drop\s+table|delete\s+from|truncate|git\s+push\s+--force|dd\s+if=)\b/i;
+const DESTRUCTIVE_BASH = /\b(rm\s+-rf|git\s+reset\s+--hard|git\s+checkout\s+--|git\s+clean\s+-f|drop\s+table|delete\s+from|truncate|git\s+push\s+--force(?!-with-lease)|git\s+commit\s+--amend|dd\s+if=)\b/i;
 
 // --- State management (per-session, atomic writes, bounded) ---
+
+function normalizeEnvValue(value) {
+  return String(value || '').trim().toLowerCase();
+}
+
+function isGateGuardDisabled() {
+  if (normalizeEnvValue(process.env.GATEGUARD_DISABLED) === '1') {
+    return true;
+  }
+
+  return ECC_DISABLE_VALUES.has(normalizeEnvValue(process.env.ECC_GATEGUARD));
+}
 
 function sanitizeSessionKey(value) {
   const raw = String(value || '').trim();
@@ -129,12 +144,33 @@ function saveState(state) {
   const stateFile = getStateFile();
   let tmpFile = null;
   try {
-    state.last_active = Date.now();
-    state.checked = pruneCheckedEntries(state.checked);
     fs.mkdirSync(STATE_DIR, { recursive: true });
+
+    let mergedChecked = Array.isArray(state.checked) ? state.checked : [];
+    let mergedLastActive = typeof state.last_active === 'number' ? state.last_active : 0;
+
+    try {
+      if (fs.existsSync(stateFile)) {
+        const diskState = JSON.parse(fs.readFileSync(stateFile, 'utf8'));
+        if (Array.isArray(diskState.checked)) {
+          mergedChecked = Array.from(new Set([...diskState.checked, ...mergedChecked]));
+        }
+        if (typeof diskState.last_active === 'number') {
+          mergedLastActive = Math.max(mergedLastActive, diskState.last_active);
+        }
+      }
+    } catch (_) {
+      /* ignore malformed or transient disk state */
+    }
+
+    const finalState = {
+      checked: pruneCheckedEntries(mergedChecked),
+      last_active: Math.max(mergedLastActive, Date.now())
+    };
+
     // Atomic write: temp file + rename prevents partial reads
-    tmpFile = stateFile + '.tmp.' + process.pid;
-    fs.writeFileSync(tmpFile, JSON.stringify(state, null, 2), 'utf8');
+    tmpFile = `${stateFile}.tmp.${process.pid}.${crypto.randomBytes(4).toString('hex')}`;
+    fs.writeFileSync(tmpFile, JSON.stringify(finalState, null, 2), 'utf8');
     try {
       fs.renameSync(tmpFile, stateFile);
     } catch (error) {
@@ -149,6 +185,8 @@ function saveState(state) {
         throw error;
       }
     }
+    tmpFile = null;
+    return true;
   } catch (_) {
     if (tmpFile) {
       try {
@@ -157,6 +195,7 @@ function saveState(state) {
         /* ignore */
       }
     }
+    return false;
   }
 }
 
@@ -164,8 +203,9 @@ function markChecked(key) {
   const state = loadState();
   if (!state.checked.includes(key)) {
     state.checked.push(key);
-    saveState(state);
+    return saveState(state);
   }
+  return true;
 }
 
 function isChecked(key) {
@@ -183,7 +223,8 @@ function isChecked(key) {
     const files = fs.readdirSync(STATE_DIR);
     const now = Date.now();
     for (const f of files) {
-      if (!f.startsWith('state-') || !f.endsWith('.json')) continue;
+      const isStateFile = f.startsWith('state-') && (f.endsWith('.json') || f.includes('.json.tmp.'));
+      if (!isStateFile) continue;
       const fp = path.join(STATE_DIR, f);
       try {
         const stat = fs.statSync(fp);
@@ -326,17 +367,50 @@ function routineBashMsg() {
   ].join('\n');
 }
 
+function withRecoveryHint(message, hookIds = [EDIT_WRITE_HOOK_ID]) {
+  const disableTargets = hookIds.map(hookId => `\`${hookId}\``).join(' or ');
+  return [
+    message,
+    '',
+    `Recovery: if GateGuard is blocking setup or repair work, run this session with \`ECC_GATEGUARD=off\` or add ${disableTargets} to \`ECC_DISABLED_HOOKS\`.`
+  ].join('\n');
+}
+
+function isSubagentInvocation(data) {
+  if (!data || typeof data !== 'object') {
+    return false;
+  }
+
+  const candidates = [
+    data.agent_id,
+    data.agentId,
+    data.parent_tool_use_id,
+    data.parentToolUseId
+  ];
+
+  return candidates.some(candidate => typeof candidate === 'string' && candidate.trim());
+}
+
 // --- Deny helper ---
 
-function denyResult(reason) {
+function denyResult(reason, options = {}) {
+  const includeRecoveryHint = options.includeRecoveryHint !== false;
+  const hookIds = Array.isArray(options.hookIds) && options.hookIds.length > 0 ? options.hookIds : [EDIT_WRITE_HOOK_ID];
   return {
     stdout: JSON.stringify({
       hookSpecificOutput: {
         hookEventName: 'PreToolUse',
         permissionDecision: 'deny',
-        permissionDecisionReason: reason
+        permissionDecisionReason: includeRecoveryHint ? withRecoveryHint(reason, hookIds) : reason
       }
     }),
+    exitCode: 0
+  };
+}
+
+function allowWithStateWarning() {
+  return {
+    stderr: '[Fact-Forcing Gate] GateGuard state could not be persisted; allowing this operation to avoid a permanent retry loop. Check GATEGUARD_STATE_DIR or filesystem permissions.',
     exitCode: 0
   };
 }
@@ -350,6 +424,11 @@ function run(rawInput) {
   } catch (_) {
     return rawInput; // allow on parse error
   }
+
+  if (isGateGuardDisabled()) {
+    return rawInput;
+  }
+
   activeStateFile = null;
   getStateFile(data);
 
@@ -358,6 +437,7 @@ function run(rawInput) {
   // Normalize: case-insensitive matching via lookup map
   const TOOL_MAP = { edit: 'Edit', write: 'Write', multiedit: 'MultiEdit', bash: 'Bash' };
   const toolName = TOOL_MAP[rawToolName.toLowerCase()] || rawToolName;
+  const inSubagent = isSubagentInvocation(data);
 
   if (toolName === 'Edit' || toolName === 'Write') {
     const filePath = toolInput.file_path || '';
@@ -365,8 +445,14 @@ function run(rawInput) {
       return rawInput; // allow
     }
 
+    if (inSubagent) {
+      return rawInput; // parent session already passed the first-touch file gate
+    }
+
     if (!isChecked(filePath)) {
-      markChecked(filePath);
+      if (!markChecked(filePath)) {
+        return allowWithStateWarning();
+      }
       return denyResult(toolName === 'Edit' ? editGateMsg(filePath) : writeGateMsg(filePath));
     }
 
@@ -374,11 +460,17 @@ function run(rawInput) {
   }
 
   if (toolName === 'MultiEdit') {
+    if (inSubagent) {
+      return rawInput; // parent session already passed the first-touch file gate
+    }
+
     const edits = toolInput.edits || [];
     for (const edit of edits) {
       const filePath = edit.file_path || '';
       if (filePath && !isClaudeSettingsPath(filePath) && !isChecked(filePath)) {
-        markChecked(filePath);
+        if (!markChecked(filePath)) {
+          return allowWithStateWarning();
+        }
         return denyResult(editGateMsg(filePath));
       }
     }
@@ -395,15 +487,19 @@ function run(rawInput) {
       // Gate destructive commands on first attempt; allow retry after facts presented
       const key = '__destructive__' + crypto.createHash('sha256').update(command).digest('hex').slice(0, 16);
       if (!isChecked(key)) {
-        markChecked(key);
-        return denyResult(destructiveBashMsg());
+        if (!markChecked(key)) {
+          return allowWithStateWarning();
+        }
+        return denyResult(destructiveBashMsg(), { includeRecoveryHint: false });
       }
       return rawInput; // allow retry after facts presented
     }
 
     if (!isChecked(ROUTINE_BASH_SESSION_KEY)) {
-      markChecked(ROUTINE_BASH_SESSION_KEY);
-      return denyResult(routineBashMsg());
+      if (!markChecked(ROUTINE_BASH_SESSION_KEY)) {
+        return allowWithStateWarning();
+      }
+      return denyResult(routineBashMsg(), { hookIds: [BASH_HOOK_ID] });
     }
 
     return rawInput; // allow

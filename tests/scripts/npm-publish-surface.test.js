@@ -43,15 +43,20 @@ function buildExpectedPublishPaths(repoRoot) {
     "manifests",
     "scripts/ecc.js",
     "scripts/catalog.js",
+    "scripts/consult.js",
     "scripts/claw.js",
     "scripts/doctor.js",
     "scripts/status.js",
     "scripts/sessions-cli.js",
+    "scripts/work-items.js",
     "scripts/install-apply.js",
     "scripts/install-plan.js",
     "scripts/list-installed.js",
+    "scripts/loop-status.js",
+    "scripts/observability-readiness.js",
     "scripts/skill-create-output.js",
     "scripts/repair.js",
+    "scripts/harness-adapter-compliance.js",
     "scripts/harness-audit.js",
     "scripts/session-inspect.js",
     "scripts/uninstall.js",
@@ -66,9 +71,16 @@ function buildExpectedPublishPaths(repoRoot) {
     "agent.yaml",
     "VERSION",
   ]
+  const exclusionPaths = [
+    "!**/__pycache__/**",
+    "!**/*.pyc",
+    "!**/*.pyo",
+    "!**/*.pyd",
+    "!**/.pytest_cache/**",
+  ]
 
   const combined = new Set(
-    [...modules.flatMap((module) => module.paths || []), ...extraPaths].map(normalizePublishPath)
+    [...modules.flatMap((module) => module.paths || []), ...extraPaths, ...exclusionPaths].map(normalizePublishPath)
   )
 
   return [...combined]
@@ -107,7 +119,10 @@ function main() {
 
       for (const requiredPath of [
         "scripts/catalog.js",
+        "scripts/consult.js",
+        "scripts/work-items.js",
         ".gemini/GEMINI.md",
+        ".qwen/QWEN.md",
         ".claude-plugin/plugin.json",
         ".codex-plugin/plugin.json",
         "schemas/install-state.schema.json",
@@ -129,6 +144,17 @@ function main() {
         assert.ok(
           !packagedPaths.has(excludedPath),
           `npm pack should not include ${excludedPath}`
+        )
+      }
+
+      for (const packagedPath of packagedPaths) {
+        assert.ok(
+          !packagedPath.includes("__pycache__/"),
+          `npm pack should not include Python bytecode cache path ${packagedPath}`
+        )
+        assert.ok(
+          !/\.py[cod]$/.test(packagedPath),
+          `npm pack should not include Python bytecode file ${packagedPath}`
         )
       }
     }],

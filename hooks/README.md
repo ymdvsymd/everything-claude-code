@@ -16,6 +16,9 @@ User request → Claude picks a tool → PreToolUse hook runs → Tool executes 
 
 ## Hooks in This Plugin
 
+Memory persistence lifecycle definitions live in `hooks/memory-persistence/`.
+The executable hook graph remains `hooks/hooks.json`; the memory persistence directory is the stable contract for SessionStart, PreCompact, observation, activity tracking, and SessionEnd behavior.
+
 ## Installing These Hooks Manually
 
 For Claude Code manual installs, do not paste the raw repo `hooks.json` into `~/.claude/settings.json` or copy it directly into `~/.claude/hooks/hooks.json`. The checked-in file is plugin/repo-oriented and is meant to be installed through the ECC installer or loaded as a plugin.
@@ -98,6 +101,15 @@ export ECC_HOOK_PROFILE=standard
 
 # Disable specific hook IDs (comma-separated)
 export ECC_DISABLED_HOOKS="pre:bash:tmux-reminder,post:edit:typecheck"
+
+# Disable only GateGuard during setup or recovery
+export ECC_GATEGUARD=off
+
+# Cap SessionStart additional context (default: 8000 chars)
+export ECC_SESSION_START_MAX_CHARS=4000
+
+# Disable SessionStart additional context entirely
+export ECC_SESSION_START_CONTEXT=off
 ```
 
 Profiles:
@@ -228,7 +240,7 @@ Async hooks run in the background. They cannot block tool execution.
 
 ## Cross-Platform Notes
 
-Hook logic is implemented in Node.js scripts for cross-platform behavior on Windows, macOS, and Linux. A small number of shell wrappers are retained for continuous-learning observer hooks; those wrappers are profile-gated and have Windows-safe fallback behavior.
+Hook logic is implemented in Node.js scripts for cross-platform behavior on Windows, macOS, and Linux. The continuous-learning observer is exposed as a Node-mode hook and delegates to its existing `observe.sh` implementation through a profile-gated runner with Windows-safe fallback behavior.
 
 ## Related
 

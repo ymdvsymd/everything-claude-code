@@ -11,9 +11,9 @@
 
 <div align="center">
 
-**Language / 语言 / 語言 / Dil**
+**Language / 语言 / 語言 / Dil / Язык / Ngôn ngữ**
 
-[**English**](../../README.md) | [Português (Brasil)](../pt-BR/README.md) | [简体中文](../../README.zh-CN.md) | [繁體中文](README.md) | [日本語](../ja-JP/README.md) | [한국어](../ko-KR/README.md) | [Türkçe](../tr/README.md)
+[**English**](../../README.md) | [Português (Brasil)](../pt-BR/README.md) | [简体中文](../../README.zh-CN.md) | [繁體中文](README.md) | [日本語](../ja-JP/README.md) | [한국어](../ko-KR/README.md) | [Türkçe](../tr/README.md) | [Русский](../ru/README.md) | [Tiếng Việt](../vi-VN/README.md)
 
 </div>
 
@@ -70,7 +70,7 @@
 /plugin marketplace add https://github.com/affaan-m/everything-claude-code
 
 # 安裝外掛程式
-/plugin install everything-claude-code
+/plugin install ecc@ecc
 ```
 
 ### 第二步：安裝規則（必需）
@@ -95,7 +95,7 @@ cp -r everything-claude-code/rules/* ~/.claude/rules/
 # /plan "新增使用者認證"
 
 # 查看可用指令
-/plugin list everything-claude-code@everything-claude-code
+/plugin list ecc@ecc
 ```
 
 **完成！** 您現在使用 15+ 代理程式、30+ 技能和 20+ 指令。
@@ -270,7 +270,7 @@ everything-claude-code/
 /plugin marketplace add https://github.com/affaan-m/everything-claude-code
 
 # 安裝外掛程式
-/plugin install everything-claude-code
+/plugin install ecc@ecc
 ```
 
 或直接新增到您的 `~/.claude/settings.json`：
@@ -286,7 +286,7 @@ everything-claude-code/
     }
   },
   "enabledPlugins": {
-    "everything-claude-code@everything-claude-code": true
+    "ecc@ecc": true
   }
 }
 ```
