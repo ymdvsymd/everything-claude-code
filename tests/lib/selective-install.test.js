@@ -27,6 +27,10 @@ const {
   resolveInstallPlan,
 } = require('../../scripts/lib/install-manifests');
 
+function normalizePlanPath(value) {
+  return String(value || '').replace(/\\/g, '/');
+}
+
 function test(name, fn) {
   try {
     fn();
@@ -236,6 +240,7 @@ function runTests() {
     assert.ok(components.some(c => c.id === 'lang:python'), 'Should have lang:python');
     assert.ok(components.some(c => c.id === 'lang:go'), 'Should have lang:go');
     assert.ok(components.some(c => c.id === 'lang:java'), 'Should have lang:java');
+    assert.ok(components.some(c => c.id === 'lang:ruby'), 'Should have lang:ruby');
   })) passed++; else failed++;
 
   if (test('component catalog includes framework: family entries', () => {
@@ -244,6 +249,7 @@ function runTests() {
     assert.ok(components.some(c => c.id === 'framework:nextjs'), 'Should have framework:nextjs');
     assert.ok(components.some(c => c.id === 'framework:django'), 'Should have framework:django');
     assert.ok(components.some(c => c.id === 'framework:springboot'), 'Should have framework:springboot');
+    assert.ok(components.some(c => c.id === 'framework:rails'), 'Should have framework:rails');
   })) passed++; else failed++;
 
   if (test('component catalog includes capability: family entries', () => {
@@ -478,6 +484,7 @@ function runTests() {
     assert.ok(result.includes('--with'), 'Help should mention --with');
     assert.ok(result.includes('--without'), 'Help should mention --without');
     assert.ok(result.includes('component'), 'Help should describe components');
+    assert.ok(result.includes('zed          - Install project settings'), 'Help should describe Zed target');
   })) passed++; else failed++;
 
   // ─── End-to-End Dry-Run ───
@@ -507,6 +514,45 @@ function runTests() {
       assert.ok(result.includes('capability:security'), 'Should show included component');
       assert.ok(result.includes('capability:orchestration'), 'Should show excluded component');
       assert.ok(result.includes('security'), 'Selected modules should include security');
+    } finally {
+      fs.rmSync(homeDir, { recursive: true, force: true });
+      fs.rmSync(projectDir, { recursive: true, force: true });
+    }
+  })) passed++; else failed++;
+
+  if (test('end-to-end: --profile minimal --target zed --dry-run --json plans project adapter', () => {
+    const { execFileSync } = require('child_process');
+    const scriptPath = path.join(__dirname, '..', '..', 'scripts', 'install-apply.js');
+    const homeDir = fs.mkdtempSync(path.join(os.tmpdir(), 'selective-e2e-'));
+    const projectDir = fs.mkdtempSync(path.join(os.tmpdir(), 'selective-e2e-zed-project-'));
+
+    try {
+      const result = execFileSync('node', [
+        scriptPath,
+        '--profile', 'minimal',
+        '--target', 'zed',
+        '--dry-run',
+        '--json',
+      ], {
+        cwd: projectDir,
+        env: { ...process.env, HOME: homeDir },
+        encoding: 'utf8',
+        stdio: ['pipe', 'pipe', 'pipe'],
+      });
+      const parsed = JSON.parse(result);
+
+      assert.strictEqual(parsed.dryRun, true);
+      assert.strictEqual(parsed.plan.target, 'zed');
+      assert.strictEqual(parsed.plan.adapter.id, 'zed-project');
+      assert.strictEqual(parsed.plan.installRoot, path.join(fs.realpathSync(projectDir), '.zed'));
+      assert.ok(
+        parsed.plan.operations.some(operation => normalizePlanPath(operation.sourceRelativePath) === '.zed/settings.json'),
+        'Should include Zed native settings operation'
+      );
+      assert.ok(
+        !parsed.plan.operations.some(operation => operation.moduleId === 'hooks-runtime'),
+        'Zed minimal dry-run should not install hook runtime files'
+      );
     } finally {
       fs.rmSync(homeDir, { recursive: true, force: true });
       fs.rmSync(projectDir, { recursive: true, force: true });

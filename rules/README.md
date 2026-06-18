@@ -16,11 +16,14 @@ rules/
 │   └── security.md
 ├── typescript/      # TypeScript/JavaScript specific
 ├── angular/         # Angular specific
+├── vue/             # Vue 3 specific
+├── nuxt/            # Nuxt 4 specific
 ├── python/          # Python specific
 ├── golang/          # Go specific
 ├── web/             # Web and frontend specific
 ├── swift/           # Swift specific
 ├── php/             # PHP specific
+├── ruby/            # Ruby / Rails specific
 └── arkts/           # HarmonyOS / ArkTS specific
 ```
 
@@ -35,11 +38,14 @@ rules/
 # Install common + one or more language-specific rule sets
 ./install.sh typescript
 ./install.sh angular
+./install.sh vue
+./install.sh nuxt
 ./install.sh python
 ./install.sh golang
 ./install.sh web
 ./install.sh swift
 ./install.sh php
+./install.sh ruby
 ./install.sh arkts
 
 # Install multiple languages at once
@@ -53,22 +59,40 @@ rules/
 > Flattening them into one directory causes language-specific files to overwrite
 > common rules, and breaks the relative `../common/` references used by
 > language-specific files.
+>
+> Use the ECC-owned namespace below for user-level Claude installs. Flat
+> package-level destinations can collide with non-ECC rule packs and do not
+> match the main README guidance.
 
 ```bash
+# Create the ECC rule namespace once.
+mkdir -p ~/.claude/rules/ecc
+
 # Install common rules (required for all projects)
-cp -r rules/common ~/.claude/rules/common
+cp -r rules/common ~/.claude/rules/ecc/
 
 # Install language-specific rules based on your project's tech stack
-cp -r rules/typescript ~/.claude/rules/typescript
-cp -r rules/angular ~/.claude/rules/angular
-cp -r rules/python ~/.claude/rules/python
-cp -r rules/golang ~/.claude/rules/golang
-cp -r rules/web ~/.claude/rules/web
-cp -r rules/swift ~/.claude/rules/swift
-cp -r rules/php ~/.claude/rules/php
-cp -r rules/arkts ~/.claude/rules/arkts
+cp -r rules/typescript ~/.claude/rules/ecc/
+cp -r rules/angular ~/.claude/rules/ecc/
+cp -r rules/vue ~/.claude/rules/ecc/
+cp -r rules/nuxt ~/.claude/rules/ecc/
+cp -r rules/python ~/.claude/rules/ecc/
+cp -r rules/golang ~/.claude/rules/ecc/
+cp -r rules/web ~/.claude/rules/ecc/
+cp -r rules/swift ~/.claude/rules/ecc/
+cp -r rules/php ~/.claude/rules/ecc/
+cp -r rules/ruby ~/.claude/rules/ecc/
+cp -r rules/arkts ~/.claude/rules/ecc/
 
 # Attention ! ! ! Configure according to your actual project requirements; the configuration here is for reference only.
+```
+
+For project-local rules, use the same namespace under the project root:
+
+```bash
+mkdir -p .claude/rules/ecc
+cp -r rules/common .claude/rules/ecc/
+cp -r rules/typescript .claude/rules/ecc/
 ```
 
 ## Rules vs Skills

@@ -176,6 +176,8 @@ function runTests() {
     assert.ok(languages.includes('golang'));
     assert.ok(languages.includes('kotlin'));
     assert.ok(languages.includes('rust'));
+    assert.ok(languages.includes('ruby'));
+    assert.ok(languages.includes('rails'));
     assert.ok(languages.includes('cpp'));
     assert.ok(languages.includes('c'));
     assert.ok(languages.includes('csharp'));
@@ -275,6 +277,32 @@ function runTests() {
     assert.ok(
       !plan.operations.some(operation => operation.destinationPath.includes(`${path.sep}hooks`)),
       'Qwen minimal profile should not install hook runtime files'
+    );
+  })) passed++; else failed++;
+
+  if (test('resolves Zed minimal profile with project settings and without hooks', () => {
+    const projectRoot = '/workspace/zed-app';
+    const plan = resolveInstallPlan({
+      profileId: 'minimal',
+      target: 'zed',
+      projectRoot,
+    });
+
+    assert.deepStrictEqual(
+      plan.selectedModuleIds,
+      ['rules-core', 'agents-core', 'commands-core', 'platform-configs', 'workflow-quality']
+    );
+    assert.deepStrictEqual(plan.skippedModuleIds, []);
+    assert.strictEqual(plan.targetAdapterId, 'zed-project');
+    assert.strictEqual(plan.targetRoot, path.join(projectRoot, '.zed'));
+    assert.ok(
+      plan.operations.some(operation => operation.sourceRelativePath === '.zed'),
+      'Should install Zed native project settings'
+    );
+    assert.ok(
+      !plan.selectedModuleIds.includes('hooks-runtime')
+      && !plan.operations.some(operation => operation.moduleId === 'hooks-runtime'),
+      'Zed minimal profile should not install hook runtime files'
     );
   })) passed++; else failed++;
 
@@ -430,6 +458,22 @@ function runTests() {
     assert.ok(selection.moduleIds.includes('rules-core'));
     assert.ok(selection.moduleIds.includes('framework-language'),
       'fsharp should resolve to framework-language module');
+  })) passed++; else failed++;
+
+  if (test('resolves ruby and rails legacy compatibility into framework-language and security modules', () => {
+    const selection = resolveLegacyCompatibilitySelection({
+      target: 'cursor',
+      legacyLanguages: ['ruby', 'rails'],
+    });
+
+    assert.deepStrictEqual(selection.canonicalLegacyLanguages, ['ruby', 'ruby']);
+    assert.ok(selection.moduleIds.includes('rules-core'));
+    assert.strictEqual(selection.moduleIds.filter(moduleId => moduleId === 'framework-language').length, 1);
+    assert.strictEqual(selection.moduleIds.filter(moduleId => moduleId === 'security').length, 1);
+    assert.ok(selection.moduleIds.includes('framework-language'),
+      'ruby should resolve to framework-language module');
+    assert.ok(selection.moduleIds.includes('security'),
+      'rails alias should add security guidance for Rails apps');
   })) passed++; else failed++;
 
   if (test('keeps antigravity legacy compatibility selections target-safe', () => {
